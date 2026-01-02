@@ -11,6 +11,9 @@ import Signup from "./pages/Signup";
 import Dashboard from "./pages/Dashboard";
 import NewProject from "./pages/NewProject";
 import ProjectEditor from "./pages/ProjectEditor";
+import Subscription from "./pages/Subscription";
+import Settings from "./pages/Settings";
+import Admin from "./pages/Admin";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -28,7 +31,10 @@ const App = () => (
             <Route path="/signup" element={<Signup />} />
             <Route path="/dashboard" element={<AuthGuard><Dashboard /></AuthGuard>} />
             <Route path="/dashboard/new" element={<AuthGuard><NewProject /></AuthGuard>} />
+            <Route path="/dashboard/subscription" element={<AuthGuard><Subscription /></AuthGuard>} />
+            <Route path="/dashboard/settings" element={<AuthGuard><Settings /></AuthGuard>} />
             <Route path="/project/:projectId" element={<AuthGuard><ProjectEditor /></AuthGuard>} />
+            <Route path="/admin" element={<AuthGuard requireAdmin><Admin /></AuthGuard>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
