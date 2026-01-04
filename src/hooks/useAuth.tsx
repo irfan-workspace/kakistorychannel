@@ -1,7 +1,7 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { User, Session } from '@supabase/supabase-js';
+import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
+import { User, Session, AuthChangeEvent } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
-import { Profile, AppRole } from '@/lib/types';
+import { Profile } from '@/lib/types';
 
 interface AuthContextType {
   user: User | null;
@@ -24,6 +24,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const initializedRef = useRef(false);
 
   const fetchProfile = async (userId: string) => {
     try {
@@ -31,10 +32,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .from('profiles')
         .select('*')
         .eq('user_id', userId)
-        .single();
+        .maybeSingle();
 
       if (error) throw error;
-      setProfile(data as Profile);
+      if (data) {
+        setProfile(data as Profile);
+      }
     } catch (error) {
       console.error('Error fetching profile:', error);
     }
@@ -63,35 +66,75 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        fetchProfile(session.user.id);
-        checkAdminRole(session.user.id);
-      }
-      setIsLoading(false);
-    });
+    // Prevent double initialization in React Strict Mode
+    if (initializedRef.current) return;
+    initializedRef.current = true;
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
+    let mounted = true;
+
+    // Get initial session
+    const initializeAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (!mounted) return;
+        
         setSession(session);
         setUser(session?.user ?? null);
         
         if (session?.user) {
-          await fetchProfile(session.user.id);
-          await checkAdminRole(session.user.id);
-        } else {
-          setProfile(null);
-          setIsAdmin(false);
+          await Promise.all([
+            fetchProfile(session.user.id),
+            checkAdminRole(session.user.id)
+          ]);
         }
-        setIsLoading(false);
+      } catch (error) {
+        console.error('Error initializing auth:', error);
+      } finally {
+        if (mounted) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    initializeAuth();
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event: AuthChangeEvent, session) => {
+        if (!mounted) return;
+        
+        // Only handle specific events to prevent reload loops
+        if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
+          setSession(session);
+          setUser(session?.user ?? null);
+          
+          if (session?.user && event !== 'TOKEN_REFRESHED') {
+            // Use setTimeout to defer state updates and prevent race conditions
+            setTimeout(async () => {
+              if (mounted) {
+                await Promise.all([
+                  fetchProfile(session.user.id),
+                  checkAdminRole(session.user.id)
+                ]);
+              }
+            }, 0);
+          } else if (!session) {
+            setProfile(null);
+            setIsAdmin(false);
+          }
+        }
+        
+        if (mounted) {
+          setIsLoading(false);
+        }
       }
     );
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signUp = async (email: string, password: string, fullName?: string) => {
