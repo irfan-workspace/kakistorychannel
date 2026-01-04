@@ -16,6 +16,7 @@ export function VideoDownloader({ scenes, aspectRatio, projectTitle }: VideoDown
   const [progress, setProgress] = useState(0);
   const [currentScene, setCurrentScene] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
   const generateVideo = useCallback(async () => {
     if (!canvasRef.current) return;
@@ -44,6 +45,10 @@ export function VideoDownloader({ scenes, aspectRatio, projectTitle }: VideoDown
     canvas.width = width;
     canvas.height = height;
 
+    // Fill initial black frame
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, width, height);
+
     try {
       // Create audio context for mixing
       const audioContext = new AudioContext();
@@ -67,6 +72,12 @@ export function VideoDownloader({ scenes, aspectRatio, projectTitle }: VideoDown
       };
 
       mediaRecorder.onstop = () => {
+        // Cancel any pending animation frame
+        if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current);
+          animationFrameRef.current = null;
+        }
+
         const blob = new Blob(chunks, { type: 'video/webm' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -82,46 +93,82 @@ export function VideoDownloader({ scenes, aspectRatio, projectTitle }: VideoDown
         toast.success('Video downloaded successfully!');
       };
 
-      mediaRecorder.start();
+      mediaRecorder.start(100); // Request data every 100ms for better chunking
+
+      // Pre-load all images first
+      const loadedImages: HTMLImageElement[] = [];
+      for (const scene of validScenes) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = () => {
+            console.warn('Image load failed, using placeholder');
+            resolve(); // Continue even if image fails
+          };
+          img.src = scene.image_url!;
+        });
+        loadedImages.push(img);
+      }
+
+      // Calculate total duration
+      const totalDuration = validScenes.reduce((acc, s) => acc + (s.actual_duration || s.estimated_duration || 5), 0);
 
       // Process each scene
-      const totalDuration = validScenes.reduce((acc, s) => acc + (s.actual_duration || s.estimated_duration || 5), 0);
       let elapsedTime = 0;
 
       for (let i = 0; i < validScenes.length; i++) {
         const scene = validScenes[i];
         const duration = scene.actual_duration || scene.estimated_duration || 5;
+        const img = loadedImages[i];
         setCurrentScene(i + 1);
 
-        // Load and draw image
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        await new Promise<void>((resolve, reject) => {
-          img.onload = () => resolve();
-          img.onerror = reject;
-          img.src = scene.image_url!;
-        });
-
-        // Draw image to fit canvas
-        const imgAspect = img.width / img.height;
-        const canvasAspect = width / height;
+        // Calculate image dimensions once
         let drawWidth, drawHeight, drawX, drawY;
+        if (img.complete && img.naturalWidth > 0) {
+          const imgAspect = img.naturalWidth / img.naturalHeight;
+          const canvasAspect = width / height;
 
-        if (imgAspect > canvasAspect) {
-          drawHeight = height;
-          drawWidth = height * imgAspect;
-          drawX = (width - drawWidth) / 2;
-          drawY = 0;
+          if (imgAspect > canvasAspect) {
+            drawHeight = height;
+            drawWidth = height * imgAspect;
+            drawX = (width - drawWidth) / 2;
+            drawY = 0;
+          } else {
+            drawWidth = width;
+            drawHeight = width / imgAspect;
+            drawX = 0;
+            drawY = (height - drawHeight) / 2;
+          }
         } else {
+          // Fallback for failed images
           drawWidth = width;
-          drawHeight = width / imgAspect;
+          drawHeight = height;
           drawX = 0;
-          drawY = (height - drawHeight) / 2;
+          drawY = 0;
         }
 
+        // Draw initial frame
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, width, height);
-        ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+        if (img.complete && img.naturalWidth > 0) {
+          ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+        }
+
+        // Start continuous rendering loop for this scene
+        let isRendering = true;
+        const renderFrame = () => {
+          if (!isRendering) return;
+          
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, width, height);
+          if (img.complete && img.naturalWidth > 0) {
+            ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+          }
+          
+          animationFrameRef.current = requestAnimationFrame(renderFrame);
+        };
+        renderFrame();
 
         // Load and play audio
         if (scene.audio_url) {
@@ -142,9 +189,16 @@ export function VideoDownloader({ scenes, aspectRatio, projectTitle }: VideoDown
         // Wait for scene duration while updating progress
         const startTime = Date.now();
         while (Date.now() - startTime < duration * 1000) {
-          await new Promise(resolve => setTimeout(resolve, 100));
+          await new Promise(resolve => setTimeout(resolve, 50));
           const currentProgress = ((elapsedTime + (Date.now() - startTime) / 1000) / totalDuration) * 100;
           setProgress(Math.min(currentProgress, 99));
+        }
+
+        // Stop rendering loop for this scene
+        isRendering = false;
+        if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current);
+          animationFrameRef.current = null;
         }
 
         elapsedTime += duration;
@@ -158,6 +212,9 @@ export function VideoDownloader({ scenes, aspectRatio, projectTitle }: VideoDown
       console.error('Video generation error:', error);
       toast.error('Failed to generate video. Please try the web player instead.');
       setIsGenerating(false);
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
     }
   }, [scenes, aspectRatio, projectTitle]);
 
