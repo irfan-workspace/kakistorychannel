@@ -15,6 +15,7 @@ import Subscription from "./pages/Subscription";
 import Settings from "./pages/Settings";
 import Admin from "./pages/Admin";
 import NotFound from "./pages/NotFound";
+import VideoPlayer from "./pages/VideoPlayer";
 
 const queryClient = new QueryClient();
 
@@ -35,6 +36,7 @@ const App = () => (
             <Route path="/dashboard/settings" element={<AuthGuard><Settings /></AuthGuard>} />
             <Route path="/project/:projectId" element={<AuthGuard><ProjectEditor /></AuthGuard>} />
             <Route path="/admin" element={<AuthGuard requireAdmin><Admin /></AuthGuard>} />
+            <Route path="/player" element={<VideoPlayer />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

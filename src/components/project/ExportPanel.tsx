@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Project, Scene } from '@/lib/types';
 import { useAuth } from '@/hooks/useAuth';
 import { useProjects } from '@/hooks/useProjects';
@@ -10,7 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-import { Loader2, AlertCircle, CheckCircle, Film, Crown, ExternalLink } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle, Film, Crown, Play } from 'lucide-react';
 import { VideoDownloader } from './VideoDownloader';
 interface ExportPanelProps {
   project: Project;
@@ -18,12 +19,19 @@ interface ExportPanelProps {
 }
 
 export function ExportPanel({ project, scenes }: ExportPanelProps) {
+  const navigate = useNavigate();
   const { profile } = useAuth();
   const { updateProject } = useProjects();
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>(project.aspect_ratio as '16:9' | '9:16');
   const [isExporting, setIsExporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [exportUrl, setExportUrl] = useState<string | null>(project.exported_video_url);
+
+  const handleWatchInPlayer = () => {
+    if (exportUrl) {
+      navigate(`/player?url=${encodeURIComponent(exportUrl)}&project=${project.id}`);
+    }
+  };
 
   const completedImages = scenes.filter((s) => s.image_status === 'completed').length;
   const completedAudio = scenes.filter((s) => s.audio_status === 'completed').length;
@@ -259,11 +267,9 @@ export function ExportPanel({ project, scenes }: ExportPanelProps) {
                     />
                   )}
                 </div>
-                <Button asChild className="w-full gap-2">
-                  <a href={exportUrl} target="_blank" rel="noopener noreferrer">
-                    <ExternalLink className="h-4 w-4" />
+                <Button onClick={handleWatchInPlayer} className="w-full gap-2">
+                    <Play className="h-4 w-4" />
                     Watch in Player
-                  </a>
                 </Button>
                 
                 <div className="border-t pt-4">
