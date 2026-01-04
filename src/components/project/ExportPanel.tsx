@@ -10,8 +10,8 @@ import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-import { Download, Loader2, AlertCircle, CheckCircle, Film, Crown } from 'lucide-react';
-
+import { Loader2, AlertCircle, CheckCircle, Film, Crown, ExternalLink } from 'lucide-react';
+import { VideoDownloader } from './VideoDownloader';
 interface ExportPanelProps {
   project: Project;
   scenes: Scene[];
@@ -261,13 +261,18 @@ export function ExportPanel({ project, scenes }: ExportPanelProps) {
                 </div>
                 <Button asChild className="w-full gap-2">
                   <a href={exportUrl} target="_blank" rel="noopener noreferrer">
-                    <Film className="h-4 w-4" />
-                    Watch Video
+                    <ExternalLink className="h-4 w-4" />
+                    Watch in Player
                   </a>
                 </Button>
-                <p className="text-xs text-muted-foreground text-center">
-                  Opens interactive video player in new tab
-                </p>
+                
+                <div className="border-t pt-4">
+                  <VideoDownloader 
+                    scenes={scenes} 
+                    aspectRatio={aspectRatio} 
+                    projectTitle={project.title}
+                  />
+                </div>
               </div>
             ) : (
               <div className="text-center py-8">
