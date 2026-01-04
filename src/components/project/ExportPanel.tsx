@@ -250,20 +250,24 @@ export function ExportPanel({ project, scenes }: ExportPanelProps) {
           <CardContent>
             {exportUrl ? (
               <div className="space-y-4">
-                <div className="aspect-video rounded-lg overflow-hidden bg-muted">
-                  <video
-                    src={exportUrl}
-                    controls
-                    className="w-full h-full object-cover"
-                    poster={scenes[0]?.image_url || undefined}
-                  />
+                <div className="aspect-video rounded-lg overflow-hidden bg-muted flex items-center justify-center">
+                  {scenes[0]?.image_url && (
+                    <img 
+                      src={scenes[0].image_url} 
+                      alt="Video preview" 
+                      className="w-full h-full object-cover"
+                    />
+                  )}
                 </div>
                 <Button asChild className="w-full gap-2">
-                  <a href={exportUrl} download>
-                    <Download className="h-4 w-4" />
-                    Download MP4
+                  <a href={exportUrl} target="_blank" rel="noopener noreferrer">
+                    <Film className="h-4 w-4" />
+                    Watch Video
                   </a>
                 </Button>
+                <p className="text-xs text-muted-foreground text-center">
+                  Opens interactive video player in new tab
+                </p>
               </div>
             ) : (
               <div className="text-center py-8">
