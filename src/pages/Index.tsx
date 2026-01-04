@@ -244,7 +244,7 @@ export default function Index() {
             <span className="font-display font-semibold">KakiStoryChannel</span>
           </div>
           <p className="text-sm text-muted-foreground">
-            © 2024 KakiStoryChannel. All rights reserved.
+            © {new Date().getFullYear()} KakiStoryChannel. All rights reserved.
           </p>
         </div>
       </footer>

@@ -49,7 +49,7 @@ export interface Scene {
   title: string;
   narration_text: string;
   visual_description: string | null;
-  estimated_duration: number;
+  estimated_duration: number | null;
   actual_duration: number | null;
   mood: string | null;
   image_url: string | null;
