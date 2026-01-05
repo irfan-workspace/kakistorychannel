@@ -77,29 +77,59 @@ Return a JSON array of scenes with this exact structure:
 
     console.log("Calling Gemini API for scene generation...");
 
-    // Call Google Gemini API directly
-    const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: `${systemPrompt}\n\nAnalyze this story script and create scenes:\n\n${script}` }
-            ]
+    // Retry logic with exponential backoff for rate limits
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+    let response: Response | null = null;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      if (attempt > 0) {
+        // Exponential backoff: 2s, 4s, 8s
+        const delay = Math.pow(2, attempt) * 1000;
+        console.log(`Rate limited, retrying in ${delay / 1000}s (attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+
+      // Call Google Gemini API directly
+      response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: `${systemPrompt}\n\nAnalyze this story script and create scenes:\n\n${script}` }
+              ]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.7,
+            topK: 40,
+            topP: 0.95,
+            maxOutputTokens: 8192,
+            responseMimeType: "application/json"
           }
-        ],
-        generationConfig: {
-          temperature: 0.7,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens: 8192,
-          responseMimeType: "application/json"
-        }
-      }),
-    });
+        }),
+      });
+
+      // If not rate limited, break out of retry loop
+      if (response.status !== 429) break;
+      
+      lastError = new Error("Rate limit exceeded");
+    }
+
+    // Error handling: No response received
+    if (!response) {
+      return new Response(
+        JSON.stringify({ 
+          error: "API request failed", 
+          message: "Failed to connect to Gemini API after retries" 
+        }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     // Error handling: API request failures
     if (!response.ok) {
@@ -117,12 +147,12 @@ Return a JSON array of scenes with this exact structure:
         );
       }
       
-      // Error handling: Rate limiting (429)
+      // Error handling: Rate limiting (429) - after all retries exhausted
       if (response.status === 429) {
         return new Response(
           JSON.stringify({ 
             error: "Rate limit exceeded", 
-            message: "Too many requests. Please try again later." 
+            message: "Too many requests to Gemini API. Please wait a minute and try again." 
           }),
           { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
