@@ -14,6 +14,65 @@ export type Database = {
   }
   public: {
     Tables: {
+      generation_jobs: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          error_message: string | null
+          id: string
+          max_retries: number
+          project_id: string
+          retry_count: number
+          scheduled_at: string
+          script_content: string
+          script_hash: string
+          started_at: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          max_retries?: number
+          project_id: string
+          retry_count?: number
+          scheduled_at?: string
+          script_content: string
+          script_hash: string
+          started_at?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          max_retries?: number
+          project_id?: string
+          retry_count?: number
+          scheduled_at?: string
+          script_content?: string
+          script_hash?: string
+          started_at?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "generation_jobs_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -166,6 +225,42 @@ export type Database = {
           },
         ]
       }
+      script_cache: {
+        Row: {
+          cached_scenes: Json
+          created_at: string
+          expires_at: string
+          hit_count: number
+          id: string
+          language: string
+          script_hash: string
+          story_type: string
+          tone: string
+        }
+        Insert: {
+          cached_scenes: Json
+          created_at?: string
+          expires_at?: string
+          hit_count?: number
+          id?: string
+          language: string
+          script_hash: string
+          story_type: string
+          tone: string
+        }
+        Update: {
+          cached_scenes?: Json
+          created_at?: string
+          expires_at?: string
+          hit_count?: number
+          id?: string
+          language?: string
+          script_hash?: string
+          story_type?: string
+          tone?: string
+        }
+        Relationships: []
+      }
       subscriptions: {
         Row: {
           created_at: string
@@ -243,6 +338,33 @@ export type Database = {
           },
         ]
       }
+      user_rate_limits: {
+        Row: {
+          created_at: string
+          id: string
+          request_count: number
+          updated_at: string
+          user_id: string
+          window_start: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          request_count?: number
+          updated_at?: string
+          user_id: string
+          window_start?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          request_count?: number
+          updated_at?: string
+          user_id?: string
+          window_start?: string
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           created_at: string
@@ -269,6 +391,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      check_rate_limit: {
+        Args: {
+          p_max_requests?: number
+          p_user_id: string
+          p_window_minutes?: number
+        }
+        Returns: boolean
+      }
+      has_active_job: { Args: { p_user_id: string }; Returns: boolean }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]

@@ -2,23 +2,88 @@ import { useState } from 'react';
 import { Project } from '@/lib/types';
 import { useProjects } from '@/hooks/useProjects';
 import { useScenes } from '@/hooks/useScenes';
+import { useJobPolling, JobStatus } from '@/hooks/useJobPolling';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
-import { Loader2, Sparkles, Wand2 } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { Loader2, Sparkles, Wand2, CheckCircle, XCircle, Clock, RefreshCw } from 'lucide-react';
 
 interface ScriptInputProps {
   project: Project;
   onScenesGenerated: () => void;
 }
 
+function JobStatusBadge({ status }: { status: JobStatus }) {
+  const statusConfig = {
+    idle: { icon: null, text: '', className: '' },
+    queued: { icon: Clock, text: 'Queued', className: 'bg-yellow-500/20 text-yellow-600' },
+    processing: { icon: Loader2, text: 'Processing', className: 'bg-blue-500/20 text-blue-600' },
+    completed: { icon: CheckCircle, text: 'Completed', className: 'bg-green-500/20 text-green-600' },
+    failed: { icon: XCircle, text: 'Failed', className: 'bg-red-500/20 text-red-600' },
+  };
+
+  const config = statusConfig[status];
+  if (!config.icon) return null;
+
+  const Icon = config.icon;
+  const isSpinning = status === 'processing';
+
+  return (
+    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${config.className}`}>
+      <Icon className={`h-3.5 w-3.5 ${isSpinning ? 'animate-spin' : ''}`} />
+      {config.text}
+    </div>
+  );
+}
+
 export function ScriptInput({ project, onScenesGenerated }: ScriptInputProps) {
   const [script, setScript] = useState(project.script_content || '');
-  const [isGenerating, setIsGenerating] = useState(false);
   const { updateProject } = useProjects();
   const { createScenes, deleteAllScenes, scenes } = useScenes(project.id);
+
+  const handleScenesCompleted = async (generatedScenes: any[]) => {
+    try {
+      // Delete existing scenes first
+      if (scenes.length > 0) {
+        await deleteAllScenes.mutateAsync();
+      }
+
+      // Create new scenes from the job result
+      const sceneInputs = generatedScenes.map((scene: any, index: number) => ({
+        project_id: project.id,
+        scene_order: scene.scene_order || index + 1,
+        title: scene.title,
+        narration_text: scene.narration_text,
+        visual_description: scene.visual_description,
+        estimated_duration: scene.estimated_duration || 5,
+        mood: scene.mood,
+      }));
+
+      await createScenes.mutateAsync(sceneInputs);
+      toast.success(`${generatedScenes.length} scenes generated successfully!`);
+      onScenesGenerated();
+    } catch (error) {
+      console.error('Failed to save scenes:', error);
+      toast.error('Failed to save generated scenes');
+    }
+  };
+
+  const {
+    status,
+    progress,
+    estimatedTimeRemaining,
+    errorMessage,
+    isProcessing,
+    submitJob,
+    reset,
+  } = useJobPolling({
+    onCompleted: handleScenesCompleted,
+    onFailed: (error) => {
+      toast.error(error);
+    },
+  });
 
   const handleSaveScript = async () => {
     await updateProject.mutateAsync({
@@ -34,7 +99,10 @@ export function ScriptInput({ project, onScenesGenerated }: ScriptInputProps) {
       return;
     }
 
-    setIsGenerating(true);
+    if (script.trim().length < 50) {
+      toast.error('Script must be at least 50 characters');
+      return;
+    }
 
     try {
       // Save script first
@@ -43,50 +111,23 @@ export function ScriptInput({ project, onScenesGenerated }: ScriptInputProps) {
         script_content: script,
       });
 
-      // Delete existing scenes
-      if (scenes.length > 0) {
-        await deleteAllScenes.mutateAsync();
-      }
-
-      // Call edge function to generate scenes
-      const response = await supabase.functions.invoke('generate-scenes', {
-        body: {
-          script,
-          language: project.language,
-          storyType: project.story_type,
-          tone: project.tone,
-        },
-      });
-
-      if (response.error) {
-        throw new Error(response.error.message);
-      }
-
-      const { scenes: generatedScenes } = response.data;
-
-      if (!generatedScenes || generatedScenes.length === 0) {
-        throw new Error('No scenes generated');
-      }
-
-      // Create scenes in database
-      const sceneInputs = generatedScenes.map((scene: any, index: number) => ({
-        project_id: project.id,
-        scene_order: index + 1,
-        title: scene.title,
-        narration_text: scene.narration_text,
-        visual_description: scene.visual_description,
-        estimated_duration: scene.estimated_duration || 5,
-        mood: scene.mood,
-      }));
-
-      await createScenes.mutateAsync(sceneInputs);
-      onScenesGenerated();
+      // Submit the job
+      await submitJob(
+        project.id,
+        script,
+        project.language,
+        project.story_type,
+        project.tone
+      );
     } catch (error) {
-      console.error('Scene generation error:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to generate scenes');
-    } finally {
-      setIsGenerating(false);
+      // Error already handled by useJobPolling
+      console.error('Generate scenes error:', error);
     }
+  };
+
+  const handleRetry = () => {
+    reset();
+    handleGenerateScenes();
   };
 
   return (
@@ -94,13 +135,18 @@ export function ScriptInput({ project, onScenesGenerated }: ScriptInputProps) {
       <div className="lg:col-span-2">
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Wand2 className="h-5 w-5 text-primary" />
-              Story Script
-            </CardTitle>
-            <CardDescription>
-              Paste your story script below. The AI will analyze it and create visual scenes.
-            </CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Wand2 className="h-5 w-5 text-primary" />
+                  Story Script
+                </CardTitle>
+                <CardDescription>
+                  Paste your story script below. The AI will analyze it and create visual scenes.
+                </CardDescription>
+              </div>
+              <JobStatusBadge status={status} />
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <Textarea
@@ -110,24 +156,66 @@ Write or paste your complete story here. The AI will automatically split it into
               value={script}
               onChange={(e) => setScript(e.target.value)}
               className="min-h-[400px] font-mono text-sm resize-none"
+              disabled={isProcessing}
             />
+
+            {/* Progress indicator */}
+            {isProcessing && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">
+                    {status === 'queued' ? 'Waiting in queue...' : 'Generating scenes...'}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {estimatedTimeRemaining !== null && estimatedTimeRemaining > 0
+                      ? `~${Math.ceil(estimatedTimeRemaining)}s remaining`
+                      : 'Almost done...'}
+                  </span>
+                </div>
+                <Progress value={progress} className="h-2" />
+              </div>
+            )}
+
+            {/* Error message */}
+            {status === 'failed' && errorMessage && (
+              <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
+                <p className="text-sm text-destructive">{errorMessage}</p>
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
                 {script.length} characters • ~{Math.ceil(script.split(/\s+/).filter(Boolean).length / 150)} min read
               </p>
               <div className="flex gap-2">
-                <Button variant="outline" onClick={handleSaveScript} disabled={updateProject.isPending}>
+                <Button 
+                  variant="outline" 
+                  onClick={handleSaveScript} 
+                  disabled={updateProject.isPending || isProcessing}
+                >
                   Save Draft
                 </Button>
+                
+                {status === 'failed' ? (
+                  <Button
+                    onClick={handleRetry}
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    Retry
+                  </Button>
+                ) : null}
+                
                 <Button
                   onClick={handleGenerateScenes}
-                  disabled={isGenerating || !script.trim()}
+                  disabled={isProcessing || !script.trim() || script.trim().length < 50}
                   className="gradient-primary gap-2"
                 >
-                  {isGenerating ? (
+                  {isProcessing ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      Generating...
+                      {status === 'queued' ? 'Queued...' : 'Generating...'}
                     </>
                   ) : (
                     <>
@@ -191,6 +279,27 @@ Write or paste your complete story here. The AI will automatically split it into
             <div className="flex justify-between">
               <span className="text-muted-foreground">Voice</span>
               <span className="capitalize font-medium">{project.voice_type}</span>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Queue Info Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Generation Info</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <div className="flex gap-2">
+              <span className="text-primary">✓</span>
+              <p>Rate limited: 5 requests per minute</p>
+            </div>
+            <div className="flex gap-2">
+              <span className="text-primary">✓</span>
+              <p>Results cached for 30 days</p>
+            </div>
+            <div className="flex gap-2">
+              <span className="text-primary">✓</span>
+              <p>Auto-retry on failures (3 attempts)</p>
             </div>
           </CardContent>
         </Card>
