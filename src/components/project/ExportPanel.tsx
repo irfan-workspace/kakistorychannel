@@ -13,6 +13,8 @@ import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { Loader2, AlertCircle, CheckCircle, Film, Crown, Play } from 'lucide-react';
 import { VideoDownloader } from './VideoDownloader';
+export type VideoQuality = '720p' | '1080p' | '4k';
+
 interface ExportPanelProps {
   project: Project;
   scenes: Scene[];
@@ -23,6 +25,7 @@ export function ExportPanel({ project, scenes }: ExportPanelProps) {
   const { profile } = useAuth();
   const { updateProject } = useProjects();
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>(project.aspect_ratio as '16:9' | '9:16');
+  const [quality, setQuality] = useState<VideoQuality>('1080p');
   const [isExporting, setIsExporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [exportUrl, setExportUrl] = useState<string | null>(project.exported_video_url);
@@ -191,12 +194,57 @@ export function ExportPanel({ project, scenes }: ExportPanelProps) {
               </RadioGroup>
             </div>
 
-            <div className="flex items-center justify-between p-4 rounded-lg border">
-              <div>
-                <p className="font-medium">Resolution</p>
-                <p className="text-sm text-muted-foreground">1080p Full HD</p>
-              </div>
-              <Badge>1080p</Badge>
+            <div className="space-y-3">
+              <Label>Video Quality</Label>
+              <RadioGroup
+                value={quality}
+                onValueChange={(v) => setQuality(v as VideoQuality)}
+              >
+                <div className="grid sm:grid-cols-3 gap-3">
+                  <Label
+                    htmlFor="quality-720p"
+                    className={`flex items-center gap-3 p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                      quality === '720p'
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:border-primary/50'
+                    }`}
+                  >
+                    <RadioGroupItem value="720p" id="quality-720p" />
+                    <div>
+                      <p className="font-medium">720p</p>
+                      <p className="text-xs text-muted-foreground">HD • Smaller file</p>
+                    </div>
+                  </Label>
+                  <Label
+                    htmlFor="quality-1080p"
+                    className={`flex items-center gap-3 p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                      quality === '1080p'
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:border-primary/50'
+                    }`}
+                  >
+                    <RadioGroupItem value="1080p" id="quality-1080p" />
+                    <div>
+                      <p className="font-medium">1080p</p>
+                      <p className="text-xs text-muted-foreground">Full HD</p>
+                    </div>
+                  </Label>
+                  <Label
+                    htmlFor="quality-4k"
+                    className={`flex items-center gap-3 p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                      quality === '4k'
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:border-primary/50'
+                    }`}
+                  >
+                    <RadioGroupItem value="4k" id="quality-4k" />
+                    <div>
+                      <p className="font-medium">4K</p>
+                      <p className="text-xs text-muted-foreground">Ultra HD • Large file</p>
+                    </div>
+                  </Label>
+                </div>
+              </RadioGroup>
             </div>
 
             {isFreeUser && (
@@ -273,11 +321,12 @@ export function ExportPanel({ project, scenes }: ExportPanelProps) {
                 </Button>
                 
                 <div className="border-t pt-4">
-                  <VideoDownloader 
-                    scenes={scenes} 
-                    aspectRatio={aspectRatio} 
-                    projectTitle={project.title}
-                  />
+                <VideoDownloader 
+                  scenes={scenes} 
+                  aspectRatio={aspectRatio} 
+                  quality={quality}
+                  projectTitle={project.title}
+                />
                 </div>
               </div>
             ) : (
