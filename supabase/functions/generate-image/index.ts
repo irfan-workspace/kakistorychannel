@@ -2,15 +2,9 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 /**
- * Generate Image Edge Function (Production Architecture)
+ * Generate Image Edge Function
  * 
- * Uses Lovable AI Gateway with Gemini image generation model.
- * No external API key management required - uses pre-configured LOVABLE_API_KEY.
- * 
- * Features:
- * - Higher rate limits than direct Gemini API
- * - Automatic image upload to Supabase Storage
- * - Proper error handling for rate limits (429) and payment (402)
+ * Uses Google Gemini Imagen API directly with user-provided API key.
  */
 
 const corsHeaders = {
@@ -18,8 +12,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Lovable AI Gateway endpoint
-const LOVABLE_AI_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
+const IMAGEN_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -29,16 +22,16 @@ serve(async (req) => {
   try {
     const { sceneId, visualDescription, style, mood } = await req.json();
     
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    if (!LOVABLE_API_KEY) {
-      console.error("LOVABLE_API_KEY is not configured");
+    if (!GEMINI_API_KEY) {
+      console.error("GEMINI_API_KEY is not configured");
       return new Response(
         JSON.stringify({ 
           error: "API key not configured", 
-          message: "Lovable AI is not properly configured." 
+          message: "Gemini API key is not configured." 
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -60,80 +53,56 @@ serve(async (req) => {
       exciting: "dynamic action, vibrant energy",
     };
 
-    const prompt = `Generate an image: ${visualDescription}. Style: ${stylePrompts[style] || stylePrompts.cartoon}. Mood: ${moodPrompts[mood] || moodPrompts.calm}. High quality, detailed illustration suitable for children's story video.`;
+    const prompt = `${visualDescription}. Style: ${stylePrompts[style] || stylePrompts.cartoon}. Mood: ${moodPrompts[mood] || moodPrompts.calm}. High quality, detailed illustration suitable for children's story video.`;
 
-    console.log("Generating image with Lovable AI:", prompt.substring(0, 100) + "...");
+    console.log("Generating image with Gemini Imagen:", prompt.substring(0, 100) + "...");
 
-    // Call Lovable AI Gateway with image generation model
-    const response = await fetch(LOVABLE_AI_URL, {
+    const response = await fetch(`${IMAGEN_API_URL}?key=${GEMINI_API_KEY}`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash-image",
-        messages: [
-          { role: "user", content: prompt }
-        ],
-        modalities: ["image", "text"]
+        instances: [{ prompt }],
+        parameters: {
+          sampleCount: 1,
+          aspectRatio: "16:9",
+          safetyFilterLevel: "block_low_and_above",
+          personGeneration: "allow_adult"
+        }
       }),
     });
 
-    // Handle rate limiting (429)
     if (response.status === 429) {
-      console.error("Rate limit exceeded on Lovable AI");
+      console.error("Rate limit exceeded on Gemini API");
       return new Response(
         JSON.stringify({ 
           error: "Rate limit exceeded", 
-          message: "Too many requests. Please wait a moment and try again." 
+          message: "Too many requests to Gemini API. Please wait a minute and try again." 
         }),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Handle payment required (402)
-    if (response.status === 402) {
-      console.error("Payment required for Lovable AI");
-      return new Response(
-        JSON.stringify({ 
-          error: "Credits exhausted", 
-          message: "Please add credits to your Lovable workspace." 
-        }),
-        { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("Lovable AI error:", response.status, errorText);
+      console.error("Gemini Imagen API error:", response.status, errorText);
       return new Response(
         JSON.stringify({ 
           error: "AI request failed", 
-          message: `AI service returned status ${response.status}` 
+          message: `Gemini API returned status ${response.status}` 
         }),
         { status: response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const data = await response.json();
-    
-    // Extract image from Lovable AI response format
-    const imageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+    const imageData = data.predictions?.[0]?.bytesBase64Encoded;
 
-    if (!imageUrl) {
-      console.error("No image in AI response:", JSON.stringify(data));
+    if (!imageData) {
+      console.error("No image in Gemini response:", JSON.stringify(data));
       throw new Error("No image generated from AI service.");
     }
-
-    // Extract base64 data from data URL
-    const base64Match = imageUrl.match(/^data:image\/\w+;base64,(.+)$/);
-    if (!base64Match) {
-      console.error("Invalid image format:", imageUrl.substring(0, 50));
-      throw new Error("Invalid image format received from AI.");
-    }
-
-    const imageData = base64Match[1];
 
     // Upload to Supabase Storage
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
