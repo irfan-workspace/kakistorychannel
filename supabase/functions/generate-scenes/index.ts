@@ -19,8 +19,8 @@ const corsHeaders = {
 };
 
 // Google Gemini API endpoint
-// Using gemini-1.5-flash for fast, cost-effective scene generation
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+// Using gemini-2.0-flash for fast, cost-effective scene generation
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
