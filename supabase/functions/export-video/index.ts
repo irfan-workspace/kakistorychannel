@@ -1,6 +1,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+/**
+ * Export Video Edge Function
+ * 
+ * Creates an interactive video player from scenes.
+ * Includes authentication, authorization, and input validation.
+ */
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -13,53 +20,198 @@ interface SceneData {
   duration: number;
 }
 
+// UUID regex pattern
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Valid aspect ratios
+const VALID_ASPECT_RATIOS = ["16:9", "9:16"];
+
+// Input constraints
+const MAX_SCENES = 50;
+const MAX_SCENE_DURATION = 120; // 2 minutes per scene max
+const MIN_SCENE_DURATION = 1;
+
+// URL validation (basic check for http/https)
+const URL_REGEX = /^https?:\/\/.+/i;
+
+function validateSceneData(scene: any, index: number): { valid: boolean; error?: string } {
+  if (!scene || typeof scene !== 'object') {
+    return { valid: false, error: `Scene ${index + 1} is invalid` };
+  }
+
+  if (!scene.id || typeof scene.id !== 'string' || !UUID_REGEX.test(scene.id)) {
+    return { valid: false, error: `Scene ${index + 1} has invalid ID` };
+  }
+
+  if (!scene.imageUrl || typeof scene.imageUrl !== 'string' || !URL_REGEX.test(scene.imageUrl)) {
+    return { valid: false, error: `Scene ${index + 1} has invalid image URL` };
+  }
+
+  if (!scene.audioUrl || typeof scene.audioUrl !== 'string' || !URL_REGEX.test(scene.audioUrl)) {
+    return { valid: false, error: `Scene ${index + 1} has invalid audio URL` };
+  }
+
+  const duration = Number(scene.duration);
+  if (isNaN(duration) || duration < MIN_SCENE_DURATION || duration > MAX_SCENE_DURATION) {
+    return { valid: false, error: `Scene ${index + 1} has invalid duration (must be ${MIN_SCENE_DURATION}-${MAX_SCENE_DURATION} seconds)` };
+  }
+
+  return { valid: true };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { projectId, aspectRatio, includeWatermark, scenes } = await req.json();
+    // Authentication check
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      console.error("No authorization header provided");
+      return new Response(
+        JSON.stringify({ error: "Unauthorized", message: "Authentication required" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+    const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    // Create client with user's auth token for auth check
+    const userSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } }
+    });
+
+    const { data: { user }, error: authError } = await userSupabase.auth.getUser();
+    if (authError || !user) {
+      console.error("Authentication failed:", authError?.message);
+      return new Response(
+        JSON.stringify({ error: "Unauthorized", message: "Invalid or expired token" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log(`Authenticated user: ${user.id}`);
+
+    // Parse and validate input
+    const body = await req.json();
+    const { projectId, aspectRatio, includeWatermark, scenes } = body;
+
+    // Validate projectId as UUID
+    if (!projectId || typeof projectId !== 'string' || !UUID_REGEX.test(projectId)) {
+      return new Response(
+        JSON.stringify({ error: "Bad Request", message: "Valid project ID is required" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Validate aspectRatio
+    const validatedAspectRatio = VALID_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : "16:9";
+
+    // Validate includeWatermark (boolean)
+    const validatedIncludeWatermark = typeof includeWatermark === 'boolean' ? includeWatermark : true;
+
+    // Validate scenes array
+    if (!Array.isArray(scenes)) {
+      return new Response(
+        JSON.stringify({ error: "Bad Request", message: "Scenes must be an array" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (scenes.length === 0) {
+      return new Response(
+        JSON.stringify({ error: "Bad Request", message: "At least one scene is required" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (scenes.length > MAX_SCENES) {
+      return new Response(
+        JSON.stringify({ error: "Bad Request", message: `Maximum ${MAX_SCENES} scenes allowed` }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Validate each scene
+    for (let i = 0; i < scenes.length; i++) {
+      const validation = validateSceneData(scenes[i], i);
+      if (!validation.valid) {
+        return new Response(
+          JSON.stringify({ error: "Bad Request", message: validation.error }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    // Authorization check - verify user owns the project
+    // Use service role client for database queries
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+    const { data: project, error: projectError } = await supabase
+      .from('projects')
+      .select('user_id')
+      .eq('id', projectId)
+      .single();
+
+    if (projectError || !project) {
+      console.error("Project not found:", projectError?.message);
+      return new Response(
+        JSON.stringify({ error: "Not Found", message: "Project not found" }),
+        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Check if user owns the project
+    if (project.user_id !== user.id) {
+      console.error(`User ${user.id} attempted to export project owned by ${project.user_id}`);
+      return new Response(
+        JSON.stringify({ error: "Forbidden", message: "You don't have permission to export this project" }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     console.log(`Starting video export for project ${projectId}`);
     console.log(`Number of scenes: ${scenes.length}`);
-    console.log(`Aspect ratio: ${aspectRatio}`);
+    console.log(`Aspect ratio: ${validatedAspectRatio}`);
 
-    // Validate scenes
+    // Filter valid scenes with both image and audio
     const validScenes = scenes.filter((s: SceneData) => s.imageUrl && s.audioUrl);
     if (validScenes.length === 0) {
-      throw new Error("No valid scenes with both image and audio");
+      return new Response(
+        JSON.stringify({ error: "Bad Request", message: "No valid scenes with both image and audio" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     console.log(`Valid scenes: ${validScenes.length}`);
 
     // Calculate total duration
     const totalDuration = validScenes.reduce((acc: number, s: SceneData) => {
-      const duration = s.duration || 5;
+      const duration = Math.min(Math.max(s.duration || 5, MIN_SCENE_DURATION), MAX_SCENE_DURATION);
       console.log(`Scene ${s.id}: duration ${duration}s`);
       return acc + duration;
     }, 0);
 
     console.log(`Total video duration: ${totalDuration}s`);
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
     // Create video manifest with all scene data
     const videoManifest = {
       projectId,
-      aspectRatio,
-      includeWatermark,
-      resolution: aspectRatio === "16:9" ? { width: 1920, height: 1080 } : { width: 1080, height: 1920 },
+      aspectRatio: validatedAspectRatio,
+      includeWatermark: validatedIncludeWatermark,
+      resolution: validatedAspectRatio === "16:9" ? { width: 1920, height: 1080 } : { width: 1080, height: 1920 },
       scenes: validScenes.map((scene: SceneData, index: number) => ({
         order: index + 1,
         imageUrl: scene.imageUrl,
         audioUrl: scene.audioUrl,
-        duration: scene.duration || 5,
+        duration: Math.min(Math.max(scene.duration || 5, MIN_SCENE_DURATION), MAX_SCENE_DURATION),
       })),
       totalDuration,
       createdAt: new Date().toISOString(),
+      userId: user.id,
     };
 
     // Store manifest
@@ -84,8 +236,7 @@ serve(async (req) => {
     console.log(`Manifest stored at: ${manifestUrlData.publicUrl}`);
 
     // Generate an interactive video player that properly stitches scenes together
-    // This creates a web-based video experience with proper timeline and controls
-    const resolution = aspectRatio === "16:9" ? { width: 1280, height: 720 } : { width: 405, height: 720 };
+    const resolution = validatedAspectRatio === "16:9" ? { width: 1280, height: 720 } : { width: 405, height: 720 };
     
     const videoPlayerHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -121,7 +272,7 @@ serve(async (req) => {
     .player-wrapper {
       position: relative;
       width: 100%;
-      aspect-ratio: ${aspectRatio.replace(":", "/")};
+      aspect-ratio: ${validatedAspectRatio.replace(":", "/")};
       background: #000;
       border-radius: 12px;
       overflow: hidden;
@@ -200,7 +351,7 @@ serve(async (req) => {
       font-variant-numeric: tabular-nums;
       color: rgba(255,255,255,0.9);
     }
-    ${includeWatermark ? `
+    ${validatedIncludeWatermark ? `
     .watermark {
       position: absolute;
       bottom: 80px;
@@ -270,7 +421,7 @@ serve(async (req) => {
       ${validScenes.map((s: SceneData, i: number) => `
         <img class="scene-display${i === 0 ? " active" : ""}" 
              src="${s.imageUrl}" 
-             data-duration="${s.duration || 5}" 
+             data-duration="${Math.min(Math.max(s.duration || 5, MIN_SCENE_DURATION), MAX_SCENE_DURATION)}" 
              data-audio="${s.audioUrl}"
              data-index="${i}"
              alt="Scene ${i + 1}" />
@@ -282,7 +433,7 @@ serve(async (req) => {
         </div>
       </div>
       
-      ${includeWatermark ? '<div class="watermark">Made with KakiStoryChannel</div>' : ''}
+      ${validatedIncludeWatermark ? '<div class="watermark">Made with KakiStoryChannel</div>' : ''}
       
       <div class="controls">
         <div class="progress-container" id="progressContainer">
@@ -326,7 +477,7 @@ serve(async (req) => {
     const startOverlay = document.getElementById('startOverlay');
     
     const totalDuration = ${totalDuration};
-    const sceneDurations = [${validScenes.map((s: SceneData) => s.duration || 5).join(', ')}];
+    const sceneDurations = [${validScenes.map((s: SceneData) => Math.min(Math.max(s.duration || 5, MIN_SCENE_DURATION), MAX_SCENE_DURATION)).join(', ')}];
     
     let currentSceneIndex = 0;
     let isPlaying = false;
@@ -521,7 +672,7 @@ serve(async (req) => {
       .from("exported-videos")
       .getPublicUrl(playerFileName);
 
-    console.log(`Video player created: ${playerUrlData.publicUrl}`);
+    console.log(`Video player created for user ${user.id}: ${playerUrlData.publicUrl}`);
     console.log(`Export completed successfully for project ${projectId}`);
 
     return new Response(
