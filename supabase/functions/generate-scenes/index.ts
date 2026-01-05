@@ -1,9 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 /**
  * Generate Scenes Edge Function
  * 
  * Uses Google Gemini API directly with user-provided API key.
+ * Includes authentication and input validation.
  */
 
 const corsHeaders = {
@@ -13,14 +15,91 @@ const corsHeaders = {
 
 const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
+// Valid enum values from database
+const VALID_LANGUAGES = ["hindi", "hinglish", "english"];
+const VALID_STORY_TYPES = ["kids", "bedtime", "moral"];
+const VALID_TONES = ["calm", "emotional", "dramatic"];
+
+// Input constraints
+const MAX_SCRIPT_LENGTH = 10000;
+const MIN_SCRIPT_LENGTH = 10;
+
+function sanitizeText(text: string): string {
+  // Remove control characters except newlines and tabs
+  return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { script, language, storyType, tone } = await req.json();
-    
+    // Authentication check
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      console.error("No authorization header provided");
+      return new Response(
+        JSON.stringify({ error: "Unauthorized", message: "Authentication required" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+    const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+
+    // Create client with user's auth token
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } }
+    });
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      console.error("Authentication failed:", authError?.message);
+      return new Response(
+        JSON.stringify({ error: "Unauthorized", message: "Invalid or expired token" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log(`Authenticated user: ${user.id}`);
+
+    // Parse and validate input
+    const body = await req.json();
+    const { script, language, storyType, tone } = body;
+
+    // Validate script
+    if (!script || typeof script !== 'string') {
+      return new Response(
+        JSON.stringify({ error: "Bad Request", message: "Script is required and must be a string" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const sanitizedScript = sanitizeText(script);
+    if (sanitizedScript.length < MIN_SCRIPT_LENGTH) {
+      return new Response(
+        JSON.stringify({ error: "Bad Request", message: `Script must be at least ${MIN_SCRIPT_LENGTH} characters` }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (sanitizedScript.length > MAX_SCRIPT_LENGTH) {
+      return new Response(
+        JSON.stringify({ error: "Bad Request", message: `Script must be less than ${MAX_SCRIPT_LENGTH} characters` }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Validate language
+    const validatedLanguage = VALID_LANGUAGES.includes(language) ? language : "english";
+
+    // Validate storyType
+    const validatedStoryType = VALID_STORY_TYPES.includes(storyType) ? storyType : "kids";
+
+    // Validate tone
+    const validatedTone = VALID_TONES.includes(tone) ? tone : "calm";
+
     const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 
     if (!GEMINI_API_KEY) {
@@ -43,9 +122,9 @@ Guidelines:
 - Include clear visual descriptions for image generation
 - Estimate duration based on narration length (avg 2-3 words per second)
 
-Language: ${language}
-Story Type: ${storyType}
-Tone: ${tone}
+Language: ${validatedLanguage}
+Story Type: ${validatedStoryType}
+Tone: ${validatedTone}
 
 Return ONLY a valid JSON object with this exact structure (no markdown, no code blocks):
 {
@@ -71,7 +150,7 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
         contents: [
           {
             parts: [
-              { text: `${systemPrompt}\n\nAnalyze this story script and create scenes:\n\n${script}` }
+              { text: `${systemPrompt}\n\nAnalyze this story script and create scenes:\n\n${sanitizedScript}` }
             ]
           }
         ],
@@ -124,7 +203,7 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
       throw new Error("Invalid JSON response from AI");
     }
 
-    console.log(`Generated ${parsed.scenes?.length || 0} scenes successfully`);
+    console.log(`Generated ${parsed.scenes?.length || 0} scenes successfully for user ${user.id}`);
 
     return new Response(JSON.stringify(parsed), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
