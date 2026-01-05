@@ -5,13 +5,34 @@ import { Progress } from '@/components/ui/progress';
 import { Download, Loader2, CheckCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
+type VideoQuality = '720p' | '1080p' | '4k';
+
 interface VideoDownloaderProps {
   scenes: Scene[];
   aspectRatio: '16:9' | '9:16';
+  quality: VideoQuality;
   projectTitle: string;
 }
 
-export function VideoDownloader({ scenes, aspectRatio, projectTitle }: VideoDownloaderProps) {
+const QUALITY_DIMENSIONS: Record<VideoQuality, { landscape: { width: number; height: number }; portrait: { width: number; height: number }; bitrate: number }> = {
+  '720p': {
+    landscape: { width: 1280, height: 720 },
+    portrait: { width: 720, height: 1280 },
+    bitrate: 2500000
+  },
+  '1080p': {
+    landscape: { width: 1920, height: 1080 },
+    portrait: { width: 1080, height: 1920 },
+    bitrate: 5000000
+  },
+  '4k': {
+    landscape: { width: 3840, height: 2160 },
+    portrait: { width: 2160, height: 3840 },
+    bitrate: 15000000
+  }
+};
+
+export function VideoDownloader({ scenes, aspectRatio, quality, projectTitle }: VideoDownloaderProps) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentScene, setCurrentScene] = useState(0);
@@ -39,9 +60,11 @@ export function VideoDownloader({ scenes, aspectRatio, projectTitle }: VideoDown
       return;
     }
 
-    // Set canvas dimensions based on aspect ratio
-    const width = aspectRatio === '16:9' ? 1280 : 720;
-    const height = aspectRatio === '16:9' ? 720 : 1280;
+    // Set canvas dimensions based on aspect ratio and quality
+    const qualityConfig = QUALITY_DIMENSIONS[quality];
+    const dimensions = aspectRatio === '16:9' ? qualityConfig.landscape : qualityConfig.portrait;
+    const width = dimensions.width;
+    const height = dimensions.height;
     canvas.width = width;
     canvas.height = height;
 
@@ -63,7 +86,7 @@ export function VideoDownloader({ scenes, aspectRatio, projectTitle }: VideoDown
 
       const mediaRecorder = new MediaRecorder(combinedStream, {
         mimeType: 'video/webm;codecs=vp9,opus',
-        videoBitsPerSecond: 5000000
+        videoBitsPerSecond: qualityConfig.bitrate
       });
 
       const chunks: Blob[] = [];
@@ -216,7 +239,7 @@ export function VideoDownloader({ scenes, aspectRatio, projectTitle }: VideoDown
         cancelAnimationFrame(animationFrameRef.current);
       }
     }
-  }, [scenes, aspectRatio, projectTitle]);
+  }, [scenes, aspectRatio, quality, projectTitle]);
 
   const validSceneCount = scenes.filter(s => s.image_url && s.audio_url && s.audio_status === 'completed').length;
 
