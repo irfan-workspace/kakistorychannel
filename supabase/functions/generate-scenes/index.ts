@@ -1,16 +1,16 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 /**
- * Generate Scenes Edge Function
+ * Generate Scenes Edge Function (Production Architecture)
  * 
- * Uses Google Gemini API directly with your own API key.
+ * Uses Lovable AI Gateway for reliable, high-throughput scene generation.
+ * No external API key management required - uses pre-configured LOVABLE_API_KEY.
  * 
- * CONFIGURATION:
- * Set the GEMINI_API_KEY environment variable in your Supabase project secrets.
- * You can get an API key from: https://aistudio.google.com/apikey
- * 
- * To update the API key, go to Supabase Dashboard > Project Settings > Edge Functions > Secrets
- * and update the GEMINI_API_KEY value.
+ * Features:
+ * - Higher rate limits than direct Gemini API
+ * - Automatic load balancing
+ * - Proper error handling for rate limits (429) and payment (402)
+ * - No unnecessary retry logic that wastes quota
  */
 
 const corsHeaders = {
@@ -18,9 +18,8 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Google Gemini API endpoint
-// Using gemini-2.0-flash for fast, cost-effective scene generation
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+// Lovable AI Gateway endpoint (OpenAI-compatible)
+const LOVABLE_AI_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -30,20 +29,14 @@ serve(async (req) => {
   try {
     const { script, language, storyType, tone } = await req.json();
     
-    // ============================================
-    // API KEY CONFIGURATION
-    // The GEMINI_API_KEY is read from environment variables.
-    // To replace the API key, update the secret in Supabase Dashboard.
-    // ============================================
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
-    // Error handling: Missing API key
-    if (!GEMINI_API_KEY) {
-      console.error("GEMINI_API_KEY is not configured");
+    if (!LOVABLE_API_KEY) {
+      console.error("LOVABLE_API_KEY is not configured");
       return new Response(
         JSON.stringify({ 
           error: "API key not configured", 
-          message: "Please set the GEMINI_API_KEY in your Supabase project secrets." 
+          message: "Lovable AI is not properly configured." 
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -62,7 +55,7 @@ Language: ${language}
 Story Type: ${storyType}
 Tone: ${tone}
 
-Return a JSON array of scenes with this exact structure:
+Return ONLY a valid JSON object with this exact structure (no markdown, no code blocks):
 {
   "scenes": [
     {
@@ -75,111 +68,79 @@ Return a JSON array of scenes with this exact structure:
   ]
 }`;
 
-    console.log("Calling Gemini API for scene generation...");
+    console.log("Calling Lovable AI Gateway for scene generation...");
 
-    // Retry logic with exponential backoff for rate limits
-    const maxRetries = 3;
-    let lastError: Error | null = null;
-    let response: Response | null = null;
+    // Single request - no unnecessary retries
+    const response = await fetch(LOVABLE_AI_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: `Analyze this story script and create scenes:\n\n${script}` }
+        ],
+      }),
+    });
 
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      if (attempt > 0) {
-        // Exponential backoff: 2s, 4s, 8s
-        const delay = Math.pow(2, attempt) * 1000;
-        console.log(`Rate limited, retrying in ${delay / 1000}s (attempt ${attempt + 1}/${maxRetries})`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-
-      // Call Google Gemini API directly
-      response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: `${systemPrompt}\n\nAnalyze this story script and create scenes:\n\n${script}` }
-              ]
-            }
-          ],
-          generationConfig: {
-            temperature: 0.7,
-            topK: 40,
-            topP: 0.95,
-            maxOutputTokens: 8192,
-            responseMimeType: "application/json"
-          }
-        }),
-      });
-
-      // If not rate limited, break out of retry loop
-      if (response.status !== 429) break;
-      
-      lastError = new Error("Rate limit exceeded");
-    }
-
-    // Error handling: No response received
-    if (!response) {
+    // Handle rate limiting (429)
+    if (response.status === 429) {
+      console.error("Rate limit exceeded on Lovable AI");
       return new Response(
         JSON.stringify({ 
-          error: "API request failed", 
-          message: "Failed to connect to Gemini API after retries" 
+          error: "Rate limit exceeded", 
+          message: "Too many requests. Please wait a moment and try again." 
         }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Error handling: API request failures
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Gemini API error:", response.status, errorText);
-      
-      // Error handling: Invalid API key (401/403)
-      if (response.status === 401 || response.status === 403) {
-        return new Response(
-          JSON.stringify({ 
-            error: "Invalid API key", 
-            message: "The GEMINI_API_KEY is invalid or has been revoked. Please update it in your Supabase project secrets." 
-          }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      
-      // Error handling: Rate limiting (429) - after all retries exhausted
-      if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ 
-            error: "Rate limit exceeded", 
-            message: "Too many requests to Gemini API. Please wait a minute and try again." 
-          }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      
-      // Generic API error
+    // Handle payment required (402)
+    if (response.status === 402) {
+      console.error("Payment required for Lovable AI");
       return new Response(
         JSON.stringify({ 
-          error: "API request failed", 
-          message: `Gemini API returned status ${response.status}` 
+          error: "Credits exhausted", 
+          message: "Please add credits to your Lovable workspace." 
+        }),
+        { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Lovable AI error:", response.status, errorText);
+      return new Response(
+        JSON.stringify({ 
+          error: "AI request failed", 
+          message: `AI service returned status ${response.status}` 
         }),
         { status: response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const data = await response.json();
-    
-    // Extract content from Gemini response format
-    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const content = data.choices?.[0]?.message?.content;
 
     if (!content) {
-      console.error("No content in Gemini response:", JSON.stringify(data));
+      console.error("No content in AI response:", JSON.stringify(data));
       throw new Error("No content in AI response");
     }
 
-    // Parse the JSON response
-    const parsed = JSON.parse(content);
+    // Parse JSON response (handle potential markdown code blocks)
+    let parsed;
+    try {
+      // Remove markdown code blocks if present
+      const cleanContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      parsed = JSON.parse(cleanContent);
+    } catch (parseError) {
+      console.error("Failed to parse AI response:", content);
+      throw new Error("Invalid JSON response from AI");
+    }
+
     console.log(`Generated ${parsed.scenes?.length || 0} scenes successfully`);
 
     return new Response(JSON.stringify(parsed), {
