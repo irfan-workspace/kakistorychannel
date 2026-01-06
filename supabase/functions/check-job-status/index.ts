@@ -27,7 +27,6 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
     // Create client with user's token
     const supabaseUser = createClient(supabaseUrl, supabaseAnonKey, {
@@ -65,9 +64,8 @@ serve(async (req) => {
     }
 
     // 3. Get job status (user can only see their own jobs)
-    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-    
-    const { data: job, error: jobError } = await supabaseAdmin
+    // Use the authenticated client (avoids relying on service-role env vars)
+    const { data: job, error: jobError } = await supabaseUser
       .from('generation_jobs')
       .select('id, status, error_message, project_id, created_at, started_at, completed_at, retry_count, progress, scenes_generated, updated_at')
       .eq('id', jobId)
@@ -103,7 +101,7 @@ serve(async (req) => {
     // 5. If completed, fetch the generated scenes
     let scenes = null;
     if (normalizedStatus === 'completed') {
-      const { data: sceneData } = await supabaseAdmin
+      const { data: sceneData } = await supabaseUser
         .from('scenes')
         .select('id, scene_order, title, narration_text, visual_description, mood, estimated_duration')
         .eq('project_id', job.project_id)
