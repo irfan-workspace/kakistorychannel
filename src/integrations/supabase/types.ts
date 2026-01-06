@@ -21,8 +21,10 @@ export type Database = {
           error_message: string | null
           id: string
           max_retries: number
+          progress: number
           project_id: string
           retry_count: number
+          scenes_generated: number
           scheduled_at: string
           script_content: string
           script_hash: string
@@ -37,8 +39,10 @@ export type Database = {
           error_message?: string | null
           id?: string
           max_retries?: number
+          progress?: number
           project_id: string
           retry_count?: number
+          scenes_generated?: number
           scheduled_at?: string
           script_content: string
           script_hash: string
@@ -53,8 +57,10 @@ export type Database = {
           error_message?: string | null
           id?: string
           max_retries?: number
+          progress?: number
           project_id?: string
           retry_count?: number
+          scenes_generated?: number
           scheduled_at?: string
           script_content?: string
           script_hash?: string
@@ -399,6 +405,15 @@ export type Database = {
         }
         Returns: boolean
       }
+      get_active_job: {
+        Args: { p_user_id: string }
+        Returns: {
+          job_id: string
+          project_id: string
+          status: string
+          updated_at: string
+        }[]
+      }
       has_active_job: { Args: { p_user_id: string }; Returns: boolean }
       has_role: {
         Args: {
@@ -407,6 +422,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      mark_job_as_stale: { Args: { p_job_id: string }; Returns: boolean }
     }
     Enums: {
       app_role: "admin" | "user"

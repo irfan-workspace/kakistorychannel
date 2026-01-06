@@ -19,7 +19,7 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return new Response(
-        JSON.stringify({ error: 'Missing or invalid Authorization header' }),
+        JSON.stringify({ error: 'Authentication required' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -48,7 +48,7 @@ serve(async (req) => {
       body = await req.json();
     } catch {
       return new Response(
-        JSON.stringify({ error: 'Invalid JSON body' }),
+        JSON.stringify({ error: 'Invalid request format' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -57,17 +57,17 @@ serve(async (req) => {
 
     if (!jobId || typeof jobId !== 'string' || !UUID_REGEX.test(jobId)) {
       return new Response(
-        JSON.stringify({ error: 'Invalid or missing jobId' }),
+        JSON.stringify({ error: 'Invalid job ID' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // 3. Get job status (user can only see their own jobs due to RLS)
+    // 3. Get job status (user can only see their own jobs)
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     
     const { data: job, error: jobError } = await supabaseAdmin
       .from('generation_jobs')
-      .select('id, status, error_message, project_id, created_at, started_at, completed_at, retry_count')
+      .select('id, status, error_message, project_id, created_at, started_at, completed_at, retry_count, progress, scenes_generated, updated_at')
       .eq('id', jobId)
       .eq('user_id', user.id)
       .single();
@@ -79,9 +79,28 @@ serve(async (req) => {
       );
     }
 
-    // 4. If completed, fetch the generated scenes
+    // 4. Normalize status to valid state machine states
+    let normalizedStatus: 'idle' | 'queued' | 'processing' | 'completed' | 'failed' = 'idle';
+    switch (job.status) {
+      case 'queued':
+        normalizedStatus = 'queued';
+        break;
+      case 'processing':
+        normalizedStatus = 'processing';
+        break;
+      case 'completed':
+        normalizedStatus = 'completed';
+        break;
+      case 'failed':
+        normalizedStatus = 'failed';
+        break;
+      default:
+        normalizedStatus = 'idle';
+    }
+
+    // 5. If completed, fetch the generated scenes
     let scenes = null;
-    if (job.status === 'completed') {
+    if (normalizedStatus === 'completed') {
       const { data: sceneData } = await supabaseAdmin
         .from('scenes')
         .select('id, scene_order, title, narration_text, visual_description, mood, estimated_duration')
@@ -91,44 +110,29 @@ serve(async (req) => {
       scenes = sceneData;
     }
 
-    // 5. Calculate progress estimate
-    let progress = 0;
-    let estimatedTimeRemaining = null;
-
-    switch (job.status) {
-      case 'queued':
-        progress = 10;
-        estimatedTimeRemaining = 30; // seconds
-        break;
-      case 'processing':
-        // Estimate based on elapsed time (assume 30s average)
-        if (job.started_at) {
-          const elapsed = (Date.now() - new Date(job.started_at).getTime()) / 1000;
-          progress = Math.min(90, 20 + Math.floor(elapsed * 2));
-          estimatedTimeRemaining = Math.max(5, 30 - elapsed);
-        } else {
-          progress = 20;
-          estimatedTimeRemaining = 25;
-        }
-        break;
-      case 'completed':
-        progress = 100;
-        estimatedTimeRemaining = 0;
-        break;
-      case 'failed':
-        progress = 0;
-        estimatedTimeRemaining = null;
-        break;
+    // 6. Generate user-friendly error message
+    let failureReason: string | null = null;
+    if (normalizedStatus === 'failed' && job.error_message) {
+      // Map technical errors to user-friendly messages
+      const errorMsg = job.error_message.toLowerCase();
+      if (errorMsg.includes('timeout')) {
+        failureReason = 'The generation took too long. Please try again.';
+      } else if (errorMsg.includes('rate limit')) {
+        failureReason = 'AI service is busy. Please try again in a moment.';
+      } else if (errorMsg.includes('gemini')) {
+        failureReason = 'AI service error. Please try again.';
+      } else {
+        failureReason = 'Generation failed. Please try again.';
+      }
     }
 
     return new Response(
       JSON.stringify({
         jobId: job.id,
-        status: job.status,
-        progress,
-        estimatedTimeRemaining,
-        errorMessage: job.error_message,
-        retryCount: job.retry_count,
+        status: normalizedStatus,
+        progress: job.progress || 0,
+        scenesGenerated: job.scenes_generated || 0,
+        failureReason,
         scenes: scenes,
         createdAt: job.created_at,
         startedAt: job.started_at,
@@ -140,7 +144,7 @@ serve(async (req) => {
   } catch (error) {
     console.error('Check job status error:', error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      JSON.stringify({ error: 'Failed to check job status' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

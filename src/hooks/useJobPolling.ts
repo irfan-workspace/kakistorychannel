@@ -2,14 +2,15 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
+// STRICT STATE MACHINE: Only these states allowed
 export type JobStatus = 'idle' | 'queued' | 'processing' | 'completed' | 'failed';
 
 interface JobState {
   jobId: string | null;
   status: JobStatus;
   progress: number;
-  estimatedTimeRemaining: number | null;
-  errorMessage: string | null;
+  scenesGenerated: number;
+  failureReason: string | null;
   scenes: any[] | null;
 }
 
@@ -20,10 +21,41 @@ interface UseJobPollingOptions {
   onFailed?: (error: string) => void;
 }
 
-export function useJobPolling(options: UseJobPollingOptions = {}) {
+// Session storage key for persisting job state
+const JOB_STATE_KEY = 'scene_generation_job';
+
+function saveJobToSession(projectId: string, jobId: string, status: JobStatus): void {
+  try {
+    sessionStorage.setItem(`${JOB_STATE_KEY}_${projectId}`, JSON.stringify({ jobId, status }));
+  } catch (e) {
+    console.warn('Failed to save job state to session:', e);
+  }
+}
+
+function loadJobFromSession(projectId: string): { jobId: string; status: JobStatus } | null {
+  try {
+    const saved = sessionStorage.getItem(`${JOB_STATE_KEY}_${projectId}`);
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch (e) {
+    console.warn('Failed to load job state from session:', e);
+  }
+  return null;
+}
+
+function clearJobFromSession(projectId: string): void {
+  try {
+    sessionStorage.removeItem(`${JOB_STATE_KEY}_${projectId}`);
+  } catch (e) {
+    console.warn('Failed to clear job state from session:', e);
+  }
+}
+
+export function useJobPolling(projectId: string | null, options: UseJobPollingOptions = {}) {
   const {
-    pollInterval = 2000,
-    maxPollTime = 120000, // 2 minutes max
+    pollInterval = 3000,
+    maxPollTime = 300000, // 5 minutes max (matches backend timeout)
     onCompleted,
     onFailed,
   } = options;
@@ -32,13 +64,14 @@ export function useJobPolling(options: UseJobPollingOptions = {}) {
     jobId: null,
     status: 'idle',
     progress: 0,
-    estimatedTimeRemaining: null,
-    errorMessage: null,
+    scenesGenerated: 0,
+    failureReason: null,
     scenes: null,
   });
 
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startTimeRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
@@ -48,28 +81,36 @@ export function useJobPolling(options: UseJobPollingOptions = {}) {
     startTimeRef.current = null;
   }, []);
 
-  const checkJobStatus = useCallback(async (jobId: string) => {
+  const checkJobStatus = useCallback(async (jobId: string): Promise<boolean> => {
+    if (!mountedRef.current) return true;
+
     try {
       const { data, error } = await supabase.functions.invoke('check-job-status', {
         body: { jobId },
       });
 
+      if (!mountedRef.current) return true;
+
       if (error) {
         console.error('Job status check error:', error);
-        throw new Error(error.message);
+        // Don't fail immediately on transient errors
+        return false;
       }
 
+      // Update state from backend (source of truth)
       setJobState(prev => ({
         ...prev,
-        status: data.status,
-        progress: data.progress,
-        estimatedTimeRemaining: data.estimatedTimeRemaining,
-        errorMessage: data.errorMessage,
-        scenes: data.scenes,
+        status: data.status as JobStatus,
+        progress: data.progress || 0,
+        scenesGenerated: data.scenesGenerated || 0,
+        failureReason: data.failureReason || null,
+        scenes: data.scenes || null,
       }));
 
+      // Handle terminal states
       if (data.status === 'completed') {
         stopPolling();
+        if (projectId) clearJobFromSession(projectId);
         if (data.scenes && onCompleted) {
           onCompleted(data.scenes);
         }
@@ -78,8 +119,9 @@ export function useJobPolling(options: UseJobPollingOptions = {}) {
 
       if (data.status === 'failed') {
         stopPolling();
+        if (projectId) clearJobFromSession(projectId);
         if (onFailed) {
-          onFailed(data.errorMessage || 'Job failed');
+          onFailed(data.failureReason || 'Generation failed');
         }
         return true;
       }
@@ -87,52 +129,67 @@ export function useJobPolling(options: UseJobPollingOptions = {}) {
       return false;
     } catch (error) {
       console.error('Polling error:', error);
+      // Don't stop on transient errors
       return false;
     }
-  }, [stopPolling, onCompleted, onFailed]);
+  }, [stopPolling, onCompleted, onFailed, projectId]);
 
-  const startPolling = useCallback((jobId: string) => {
+  const startPolling = useCallback((jobId: string, initialStatus: JobStatus = 'queued') => {
+    // Don't start if already terminal
+    if (initialStatus === 'completed' || initialStatus === 'failed') {
+      return;
+    }
+
+    stopPolling();
     startTimeRef.current = Date.now();
     
     const poll = async () => {
+      if (!mountedRef.current) return;
+
       // Check if we've exceeded max poll time
       if (startTimeRef.current && Date.now() - startTimeRef.current > maxPollTime) {
         stopPolling();
         setJobState(prev => ({
           ...prev,
           status: 'failed',
-          errorMessage: 'Job timed out. Please try again.',
+          failureReason: 'The generation is taking too long. Please try again.',
         }));
+        if (projectId) clearJobFromSession(projectId);
         if (onFailed) {
-          onFailed('Job timed out');
+          onFailed('Generation timed out');
         }
         return;
       }
 
       const isDone = await checkJobStatus(jobId);
       
-      if (!isDone) {
+      if (!isDone && mountedRef.current) {
         pollingRef.current = setTimeout(poll, pollInterval);
       }
     };
 
+    // Initial check
     poll();
-  }, [checkJobStatus, pollInterval, maxPollTime, stopPolling, onFailed]);
+  }, [checkJobStatus, pollInterval, maxPollTime, stopPolling, onFailed, projectId]);
 
   const submitJob = useCallback(async (
-    projectId: string,
     script: string,
     language: string,
     storyType: string,
     tone: string
   ) => {
-    // Reset state
+    if (!projectId) {
+      toast.error('Project not found');
+      return;
+    }
+
+    // Set to queued immediately for responsive UI
     setJobState({
       jobId: null,
       status: 'queued',
       progress: 5,
-      estimatedTimeRemaining: 30,
-      errorMessage: null,
+      scenesGenerated: 0,
+      failureReason: null,
       scenes: null,
     });
 
@@ -147,28 +204,67 @@ export function useJobPolling(options: UseJobPollingOptions = {}) {
         },
       });
 
+      // Handle different response scenarios
       if (error) {
-        throw new Error(error.message);
+        // Check if it's a FunctionsHttpError with a response
+        const errorData = error as any;
+        
+        // Try to extract the actual response data for 409 handling
+        if (errorData?.context?.status === 409 || errorData?.status === 409) {
+          // 409 is NOT an error - it means we have an existing job
+          // We need to get the job data from the error response
+          console.log('409 response - existing job detected');
+          
+          // The functions.invoke wraps 409 as an error, but we need to handle it
+          // Try to parse the response body if available
+          try {
+            const responseBody = errorData?.context?.body || errorData?.message;
+            if (responseBody && typeof responseBody === 'string') {
+              const parsed = JSON.parse(responseBody);
+              if (parsed.jobId) {
+                console.log(`Resuming existing job: ${parsed.jobId}`);
+                setJobState(prev => ({
+                  ...prev,
+                  jobId: parsed.jobId,
+                  status: (parsed.status as JobStatus) || 'processing',
+                }));
+                saveJobToSession(projectId, parsed.jobId, (parsed.status as JobStatus) || 'processing');
+                startPolling(parsed.jobId, (parsed.status as JobStatus) || 'processing');
+                return { jobId: parsed.jobId, existingJob: true };
+              }
+            }
+          } catch (parseError) {
+            console.warn('Could not parse 409 response:', parseError);
+          }
+        }
+
+        // Real error
+        throw new Error(error.message || 'Failed to submit job');
       }
 
-      if (data.error) {
-        throw new Error(data.error);
-      }
-
-      setJobState(prev => ({
-        ...prev,
-        jobId: data.jobId,
-        status: data.status,
-      }));
-
-      // If cached result, complete immediately
-      if (data.cached && data.status === 'completed') {
+      // Handle 409 from successful response (shouldn't happen with invoke but just in case)
+      if (data?.existingJob && data?.jobId) {
+        console.log(`Existing job found: ${data.jobId}, status: ${data.status}`);
         setJobState(prev => ({
           ...prev,
+          jobId: data.jobId,
+          status: (data.status as JobStatus) || 'processing',
+        }));
+        saveJobToSession(projectId, data.jobId, (data.status as JobStatus) || 'processing');
+        startPolling(data.jobId, (data.status as JobStatus) || 'processing');
+        return data;
+      }
+
+      // Handle cached result (immediate completion)
+      if (data.cached && data.status === 'completed') {
+        setJobState({
+          jobId: data.jobId,
           status: 'completed',
           progress: 100,
+          scenesGenerated: data.scenesGenerated || 0,
+          failureReason: null,
           scenes: data.scenes,
-        }));
+        });
         
         if (onCompleted && data.scenes) {
           onCompleted(data.scenes);
@@ -178,42 +274,83 @@ export function useJobPolling(options: UseJobPollingOptions = {}) {
         return data;
       }
 
-      // Start polling for non-cached jobs
-      startPolling(data.jobId);
+      // Normal job creation
+      setJobState(prev => ({
+        ...prev,
+        jobId: data.jobId,
+        status: (data.status as JobStatus) || 'queued',
+        progress: data.progress || 5,
+      }));
+
+      saveJobToSession(projectId, data.jobId, (data.status as JobStatus) || 'queued');
+      startPolling(data.jobId, (data.status as JobStatus) || 'queued');
       return data;
 
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to submit job';
+      
+      // Map technical errors to user-friendly messages
+      let userMessage = message;
+      if (message.includes('rate limit') || message.includes('429')) {
+        userMessage = 'Please wait a moment before generating more scenes';
+      } else if (message.includes('authentication') || message.includes('401')) {
+        userMessage = 'Please log in again to continue';
+      } else if (message.includes('500') || message.includes('service')) {
+        userMessage = 'Service temporarily unavailable. Please try again.';
+      }
+
       setJobState(prev => ({
         ...prev,
         status: 'failed',
-        errorMessage: message,
+        failureReason: userMessage,
       }));
-      toast.error(message);
+      toast.error(userMessage);
       throw error;
     }
-  }, [startPolling, onCompleted]);
+  }, [projectId, startPolling, onCompleted]);
 
   const reset = useCallback(() => {
     stopPolling();
+    if (projectId) clearJobFromSession(projectId);
     setJobState({
       jobId: null,
       status: 'idle',
       progress: 0,
-      estimatedTimeRemaining: null,
-      errorMessage: null,
+      scenesGenerated: 0,
+      failureReason: null,
       scenes: null,
     });
-  }, [stopPolling]);
+  }, [stopPolling, projectId]);
+
+  // Resume polling on mount if there's an active job (refresh safety)
+  useEffect(() => {
+    if (!projectId) return;
+
+    const savedJob = loadJobFromSession(projectId);
+    if (savedJob && savedJob.jobId && savedJob.status !== 'completed' && savedJob.status !== 'failed') {
+      console.log(`Resuming job ${savedJob.jobId} from session (status: ${savedJob.status})`);
+      setJobState(prev => ({
+        ...prev,
+        jobId: savedJob.jobId,
+        status: savedJob.status,
+      }));
+      startPolling(savedJob.jobId, savedJob.status);
+    }
+  }, [projectId, startPolling]);
 
   // Cleanup on unmount
   useEffect(() => {
-    return () => stopPolling();
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      stopPolling();
+    };
   }, [stopPolling]);
 
   return {
     ...jobState,
     isProcessing: jobState.status === 'queued' || jobState.status === 'processing',
+    canRetry: jobState.status === 'failed',
     submitJob,
     reset,
     stopPolling,

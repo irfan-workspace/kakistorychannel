@@ -47,7 +47,7 @@ function chunkScript(script: string, maxSize: number): string[] {
   return chunks.length > 0 ? chunks : [script];
 }
 
-// Call Gemini API with retry logic
+// Call Gemini API with retry logic - NEVER parallel calls
 async function callGeminiWithRetry(
   prompt: string,
   apiKey: string,
@@ -77,7 +77,7 @@ async function callGeminiWithRetry(
         await delay(backoffDelay);
         return callGeminiWithRetry(prompt, apiKey, attempt + 1);
       }
-      throw new Error('Gemini API rate limit exceeded after max retries');
+      throw new Error('AI service rate limit exceeded. Please try again later.');
     }
 
     if (!response.ok) {
@@ -91,7 +91,7 @@ async function callGeminiWithRetry(
         return callGeminiWithRetry(prompt, apiKey, attempt + 1);
       }
       
-      throw new Error(`Gemini API error: ${response.status}`);
+      throw new Error(`AI service error: ${response.status}`);
     }
 
     const data = await response.json();
@@ -184,10 +184,31 @@ ${chunk}`;
   
   const responseText = result.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!responseText) {
-    throw new Error('Empty response from Gemini');
+    throw new Error('Empty response from AI');
   }
 
   return parseGeminiResponse(responseText);
+}
+
+// Update job progress in database
+async function updateJobProgress(
+  supabaseAdmin: any,
+  jobId: string,
+  progress: number,
+  scenesGenerated: number
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from('generation_jobs')
+    .update({
+      progress,
+      scenes_generated: scenesGenerated,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', jobId);
+
+  if (error) {
+    console.error('Failed to update progress:', error.message);
+  }
 }
 
 serve(async (req) => {
@@ -202,14 +223,26 @@ serve(async (req) => {
 
   const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
+  // Extract jobId from request for cleanup in finally block
+  let jobId: string | null = null;
+  let finalStatus: 'completed' | 'failed' = 'failed';
+  let errorMessage: string | null = null;
+  let scenesCount = 0;
+
   try {
     // Parse job data
-    const { jobId, projectId, script, language, storyType, tone, scriptHash } = await req.json();
+    const body = await req.json();
+    jobId = body.jobId;
+    const { projectId, script, language, storyType, tone, scriptHash } = body;
 
     console.log(`Processing job ${jobId} for project ${projectId}`);
 
     if (!geminiApiKey) {
-      throw new Error('GEMINI_API_KEY not configured');
+      throw new Error('AI service not configured');
+    }
+
+    if (!jobId) {
+      throw new Error('Missing job ID');
     }
 
     // Update job status to processing
@@ -218,24 +251,31 @@ serve(async (req) => {
       .update({
         status: 'processing',
         started_at: new Date().toISOString(),
+        progress: 5,
+        updated_at: new Date().toISOString(),
       })
       .eq('id', jobId);
 
     if (updateError) {
       console.error('Failed to update job status:', updateError.message);
+      throw new Error('Failed to start job');
     }
 
     // Split script into chunks
     const chunks = chunkScript(script, CHUNK_SIZE);
     console.log(`Script split into ${chunks.length} chunks`);
 
-    // Process chunks sequentially (never parallel to avoid rate limits)
+    // Process chunks SEQUENTIALLY (never parallel to avoid rate limits)
     const allScenes: any[] = [];
     let sceneOrder = 1;
 
     for (let i = 0; i < chunks.length; i++) {
       console.log(`Processing chunk ${i + 1}/${chunks.length}`);
       
+      // Calculate progress (5-90% during processing)
+      const chunkProgress = 5 + Math.floor((i / chunks.length) * 85);
+      await updateJobProgress(supabaseAdmin, jobId, chunkProgress, allScenes.length);
+
       const chunkScenes = await generateScenesForChunk(
         chunks[i],
         i,
@@ -246,7 +286,7 @@ serve(async (req) => {
         geminiApiKey
       );
 
-      // Add scenes to database incrementally
+      // Add scenes to database INCREMENTALLY
       for (const scene of chunkScenes) {
         const sceneData = {
           project_id: projectId,
@@ -266,6 +306,8 @@ serve(async (req) => {
           console.error(`Failed to insert scene ${sceneOrder}:`, insertError.message);
         } else {
           allScenes.push(sceneData);
+          // Update progress after each scene
+          await updateJobProgress(supabaseAdmin, jobId, chunkProgress, allScenes.length);
         }
       }
 
@@ -275,6 +317,8 @@ serve(async (req) => {
         await delay(DELAY_BETWEEN_CHUNKS);
       }
     }
+
+    scenesCount = allScenes.length;
 
     // Cache the result
     const { error: cacheError } = await supabaseAdmin
@@ -294,20 +338,8 @@ serve(async (req) => {
       console.error('Failed to cache result:', cacheError.message);
     }
 
-    // Mark job as completed
-    const { error: completeError } = await supabaseAdmin
-      .from('generation_jobs')
-      .update({
-        status: 'completed',
-        completed_at: new Date().toISOString(),
-      })
-      .eq('id', jobId);
-
-    if (completeError) {
-      console.error('Failed to mark job complete:', completeError.message);
-    }
-
-    console.log(`Job ${jobId} completed with ${allScenes.length} scenes`);
+    finalStatus = 'completed';
+    console.log(`Job ${jobId} processing completed with ${allScenes.length} scenes`);
 
     return new Response(
       JSON.stringify({ success: true, scenesCount: allScenes.length }),
@@ -316,52 +348,43 @@ serve(async (req) => {
 
   } catch (error) {
     console.error('Worker error:', error);
-
-    // Parse jobId from request if possible
-    let jobId: string | null = null;
-    try {
-      const body = await req.clone().json();
-      jobId = body.jobId;
-    } catch {}
-
-    if (jobId) {
-      // Get current retry count
-      const { data: job } = await supabaseAdmin
-        .from('generation_jobs')
-        .select('retry_count, max_retries')
-        .eq('id', jobId)
-        .single();
-
-      if (job && job.retry_count < job.max_retries) {
-        // Schedule retry
-        const { error: retryError } = await supabaseAdmin
-          .from('generation_jobs')
-          .update({
-            retry_count: job.retry_count + 1,
-            scheduled_at: new Date(Date.now() + getBackoffDelay(job.retry_count)).toISOString(),
-            status: 'queued',
-          })
-          .eq('id', jobId);
-
-        if (!retryError) {
-          console.log(`Job ${jobId} scheduled for retry ${job.retry_count + 1}/${job.max_retries}`);
-        }
-      } else {
-        // Mark as failed
-        await supabaseAdmin
-          .from('generation_jobs')
-          .update({
-            status: 'failed',
-            error_message: error instanceof Error ? error.message : 'Unknown error',
-            completed_at: new Date().toISOString(),
-          })
-          .eq('id', jobId);
-      }
-    }
+    errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    finalStatus = 'failed';
 
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      JSON.stringify({ error: errorMessage }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
+
+  } finally {
+    // GUARANTEED CLEANUP: Always update job status and release lock
+    if (jobId) {
+      console.log(`Cleanup: Setting job ${jobId} to ${finalStatus}`);
+      
+      const cleanupData: any = {
+        status: finalStatus,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (finalStatus === 'completed') {
+        cleanupData.progress = 100;
+        cleanupData.scenes_generated = scenesCount;
+        cleanupData.completed_at = new Date().toISOString();
+      } else {
+        cleanupData.error_message = errorMessage || 'Unknown error';
+        cleanupData.completed_at = new Date().toISOString();
+      }
+
+      const { error: cleanupError } = await supabaseAdmin
+        .from('generation_jobs')
+        .update(cleanupData)
+        .eq('id', jobId);
+
+      if (cleanupError) {
+        console.error('Cleanup failed:', cleanupError.message);
+      } else {
+        console.log(`Cleanup successful for job ${jobId}`);
+      }
+    }
   }
 });
