@@ -138,12 +138,20 @@ export function ScriptInput({ project, onScenesGenerated }: ScriptInputProps) {
   const getTimeEstimate = () => {
     if (status === 'queued') return 'Waiting in queue...';
     if (status === 'processing') {
-      if (progress < 20) return 'Starting generation...';
-      if (progress < 50) return 'Processing script...';
-      if (progress < 80) return 'Creating scenes...';
+      if (progress <= 5) return '🚀 Processing started!';
+      if (progress < 20) return 'Analyzing script...';
+      if (progress < 50) return 'Generating scenes...';
+      if (progress < 80) return 'Creating scene details...';
       return 'Almost done...';
     }
     return '';
+  };
+
+  // Get the display progress - show a minimum visible progress when processing starts
+  const getDisplayProgress = () => {
+    if (status === 'queued') return 5;
+    if (status === 'processing' && progress <= 5) return 10; // Show visible progress when processing starts
+    return progress;
   };
 
   return (
@@ -177,17 +185,45 @@ Write or paste your complete story here. The AI will automatically split it into
 
             {/* Progress indicator */}
             {isProcessing && (
-              <div className="space-y-2">
+              <div className="space-y-3 p-4 bg-muted/50 rounded-lg border">
+                {/* Status header */}
+                <div className="flex items-center gap-2">
+                  {status === 'queued' ? (
+                    <Clock className="h-4 w-4 text-yellow-500 animate-pulse" />
+                  ) : (
+                    <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
+                  )}
+                  <span className="font-medium text-sm">
+                    {status === 'queued' ? 'In Queue' : 'Processing'}
+                  </span>
+                  {status === 'processing' && (
+                    <span className="text-xs text-green-600 bg-green-100 px-2 py-0.5 rounded-full">
+                      Started
+                    </span>
+                  )}
+                </div>
+
+                {/* Progress details */}
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">
                     {getTimeEstimate()}
                   </span>
-                  <span className="text-muted-foreground">
-                    {progress}%
+                  <span className="text-muted-foreground font-mono">
+                    {getDisplayProgress()}%
                     {scenesGenerated > 0 && ` • ${scenesGenerated} scenes`}
                   </span>
                 </div>
-                <Progress value={progress} className="h-2" />
+                <Progress 
+                  value={getDisplayProgress()} 
+                  className={`h-2 ${status === 'processing' ? '[&>div]:bg-blue-500' : '[&>div]:bg-yellow-500'}`} 
+                />
+                
+                {/* Helpful message */}
+                <p className="text-xs text-muted-foreground">
+                  {status === 'queued' 
+                    ? 'Your request is queued. Processing will start shortly...'
+                    : 'AI is analyzing your script and creating scenes. This may take 1-2 minutes.'}
+                </p>
               </div>
             )}
 
