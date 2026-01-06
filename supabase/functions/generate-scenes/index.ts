@@ -1,19 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-/**
- * Generate Scenes Edge Function
- * 
- * Uses Lovable AI Gateway for scene generation.
- * Includes authentication and input validation.
- */
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const LOVABLE_AI_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
 // Valid enum values from database
 const VALID_LANGUAGES = ["hindi", "hinglish", "english"];
@@ -25,7 +18,6 @@ const MAX_SCRIPT_LENGTH = 10000;
 const MIN_SCRIPT_LENGTH = 10;
 
 function sanitizeText(text: string): string {
-  // Remove control characters except newlines and tabs
   return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
 }
 
@@ -93,21 +85,17 @@ serve(async (req) => {
 
     // Validate language
     const validatedLanguage = VALID_LANGUAGES.includes(language) ? language : "english";
-
-    // Validate storyType
     const validatedStoryType = VALID_STORY_TYPES.includes(storyType) ? storyType : "kids";
-
-    // Validate tone
     const validatedTone = VALID_TONES.includes(tone) ? tone : "calm";
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 
-    if (!LOVABLE_API_KEY) {
-      console.error("LOVABLE_API_KEY is not configured");
+    if (!GEMINI_API_KEY) {
+      console.error("GEMINI_API_KEY is not configured");
       return new Response(
         JSON.stringify({ 
           error: "API key not configured", 
-          message: "Lovable AI API key is not configured." 
+          message: "Gemini API key is not configured." 
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -139,25 +127,29 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
   ]
 }`;
 
-    console.log("Calling Lovable AI for scene generation...");
+    console.log("Calling Gemini API for scene generation...");
 
-    const response = await fetch(LOVABLE_AI_URL, {
+    const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: `Analyze this story script and create scenes:\n\n${sanitizedScript}` }
-        ],
+        contents: [{
+          parts: [{
+            text: `${systemPrompt}\n\nAnalyze this story script and create scenes:\n\n${sanitizedScript}`
+          }]
+        }],
+        generationConfig: {
+          temperature: 0.7,
+          topP: 0.9,
+          maxOutputTokens: 4096,
+        },
       }),
     });
 
     if (response.status === 429) {
-      console.error("Rate limit exceeded on Lovable AI");
+      console.error("Rate limit exceeded on Gemini API");
       return new Response(
         JSON.stringify({ 
           error: "Rate limit exceeded", 
@@ -167,20 +159,9 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
       );
     }
 
-    if (response.status === 402) {
-      console.error("Payment required for Lovable AI");
-      return new Response(
-        JSON.stringify({ 
-          error: "Payment required", 
-          message: "AI credits exhausted. Please add credits to continue." 
-        }),
-        { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("Lovable AI error:", response.status, errorText);
+      console.error("Gemini API error:", response.status, errorText);
       return new Response(
         JSON.stringify({ 
           error: "AI request failed", 
@@ -191,10 +172,10 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!content) {
-      console.error("No content in Lovable AI response:", JSON.stringify(data));
+      console.error("No content in Gemini response:", JSON.stringify(data));
       throw new Error("No content in AI response");
     }
 
