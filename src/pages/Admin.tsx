@@ -92,6 +92,21 @@ export default function Admin() {
     },
   });
 
+  // Fetch usage logs
+  const { data: usageLogs, isLoading: usageLoading } = useQuery({
+    queryKey: ['admin-usage'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('usage_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (error) throw error;
+      return data;
+    },
+  });
+
   const statCards = [
     { label: 'Total Users', value: stats?.totalUsers ?? 0, icon: Users, color: 'text-primary' },
     { label: 'Total Projects', value: stats?.totalProjects ?? 0, icon: Video, color: 'text-accent' },
@@ -256,9 +271,48 @@ export default function Admin() {
                 <CardDescription>Track platform usage and credits consumption</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="flex items-center justify-center py-12 text-muted-foreground">
-                  <p>Usage analytics coming soon...</p>
-                </div>
+                {usageLoading ? (
+                  <div className="space-y-2">
+                    {[1, 2, 3].map((i) => (
+                      <Skeleton key={i} className="h-12 w-full" />
+                    ))}
+                  </div>
+                ) : usageLogs && usageLogs.length > 0 ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Action</TableHead>
+                        <TableHead>Credits Used</TableHead>
+                        <TableHead>Project ID</TableHead>
+                        <TableHead>Timestamp</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {usageLogs.map((log: any) => (
+                        <TableRow key={log.id}>
+                          <TableCell className="font-medium capitalize">
+                            {log.action_type.replace(/_/g, ' ')}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={log.credits_used > 0 ? 'default' : 'secondary'}>
+                              {log.credits_used || 0}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-xs font-mono">
+                            {log.project_id ? log.project_id.slice(0, 8) + '...' : '-'}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {formatDistanceToNow(new Date(log.created_at), { addSuffix: true })}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <div className="flex items-center justify-center py-12 text-muted-foreground">
+                    <p>No usage logs yet</p>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
