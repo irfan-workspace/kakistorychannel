@@ -102,6 +102,23 @@ export function useJobPolling(projectId: string | null, options: UseJobPollingOp
 
       if (error) {
         console.error('Job status check error:', error);
+
+        const status = (error as any)?.context?.status ?? (error as any)?.status;
+        if (status === 404) {
+          console.warn('Job not found during polling, clearing local job state', { jobId });
+          stopPolling();
+          if (projectId) clearJobFromSession(projectId);
+          setJobState({
+            jobId: null,
+            status: 'idle',
+            progress: 0,
+            scenesGenerated: 0,
+            failureReason: null,
+            scenes: null,
+          });
+          toast.error('That generation job is no longer available. Please generate again.');
+          return true;
+        }
         
         // Check if it's an auth error
         const errorMessage = error.message?.toLowerCase() || '';
