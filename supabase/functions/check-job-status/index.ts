@@ -72,8 +72,9 @@ Deno.serve(async (req: Request) => {
       .single();
 
     if (jobError || !job) {
+      console.log('Job not found', { jobId, userId: user.id, jobError: jobError?.message });
       return new Response(
-        JSON.stringify({ error: 'Job not found' }),
+        JSON.stringify({ error: 'Job not found', code: 'JOB_NOT_FOUND' }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }

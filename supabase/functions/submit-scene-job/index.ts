@@ -286,24 +286,33 @@ Deno.serve(async (req: Request) => {
 
     console.log(`Job ${newJob.id} created for user ${user.id}`);
 
-    // 8. Trigger the worker function asynchronously (fire and forget)
-    const workerUrl = `${supabaseUrl}/functions/v1/process-scene-job`;
-    fetch(workerUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${supabaseServiceKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        jobId: newJob.id,
-        projectId,
-        script: sanitizedScript,
-        language: validatedLanguage,
-        storyType: validatedStoryType,
-        tone: validatedTone,
-        scriptHash,
-      }),
-    }).catch(err => console.error('Worker trigger failed:', err));
+    // 8. Trigger the worker function asynchronously (must be kept alive with waitUntil)
+    const workerBody = {
+      jobId: newJob.id,
+      projectId,
+      script: sanitizedScript,
+      language: validatedLanguage,
+      storyType: validatedStoryType,
+      tone: validatedTone,
+      scriptHash,
+    };
+
+    const triggerWorker = async () => {
+      const { error: workerError } = await supabaseAdmin.functions.invoke('process-scene-job', {
+        body: workerBody,
+      });
+      if (workerError) {
+        console.error('Worker invoke failed:', workerError);
+      }
+    };
+
+    const waitUntil = (globalThis as any).EdgeRuntime?.waitUntil as undefined | ((p: Promise<unknown>) => void);
+    if (typeof waitUntil === 'function') {
+      waitUntil(triggerWorker());
+    } else {
+      // Fallback for environments without waitUntil: await so the request isn't dropped
+      await triggerWorker();
+    }
 
     // 9. Return jobId immediately with 202 Accepted
     return new Response(
