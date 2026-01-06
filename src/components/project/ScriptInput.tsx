@@ -15,11 +15,11 @@ interface ScriptInputProps {
   onScenesGenerated: () => void;
 }
 
-function JobStatusBadge({ status }: { status: JobStatus }) {
+function JobStatusBadge({ status, scenesGenerated }: { status: JobStatus; scenesGenerated: number }) {
   const statusConfig = {
     idle: { icon: null, text: '', className: '' },
     queued: { icon: Clock, text: 'Queued', className: 'bg-yellow-500/20 text-yellow-600' },
-    processing: { icon: Loader2, text: 'Processing', className: 'bg-blue-500/20 text-blue-600' },
+    processing: { icon: Loader2, text: `Processing${scenesGenerated > 0 ? ` (${scenesGenerated} scenes)` : ''}`, className: 'bg-blue-500/20 text-blue-600' },
     completed: { icon: CheckCircle, text: 'Completed', className: 'bg-green-500/20 text-green-600' },
     failed: { icon: XCircle, text: 'Failed', className: 'bg-red-500/20 text-red-600' },
   };
@@ -73,15 +73,17 @@ export function ScriptInput({ project, onScenesGenerated }: ScriptInputProps) {
   const {
     status,
     progress,
-    estimatedTimeRemaining,
-    errorMessage,
+    scenesGenerated,
+    failureReason,
     isProcessing,
+    canRetry,
     submitJob,
     reset,
-  } = useJobPolling({
+  } = useJobPolling(project.id, {
     onCompleted: handleScenesCompleted,
     onFailed: (error) => {
-      toast.error(error);
+      // Don't show toast here - it's already handled in useJobPolling or will show in UI
+      console.log('Job failed:', error);
     },
   });
 
@@ -113,7 +115,6 @@ export function ScriptInput({ project, onScenesGenerated }: ScriptInputProps) {
 
       // Submit the job
       await submitJob(
-        project.id,
         script,
         project.language,
         project.story_type,
@@ -127,7 +128,22 @@ export function ScriptInput({ project, onScenesGenerated }: ScriptInputProps) {
 
   const handleRetry = () => {
     reset();
-    handleGenerateScenes();
+    // Small delay to ensure state is cleared
+    setTimeout(() => {
+      handleGenerateScenes();
+    }, 100);
+  };
+
+  // Calculate estimated time remaining based on progress
+  const getTimeEstimate = () => {
+    if (status === 'queued') return 'Waiting in queue...';
+    if (status === 'processing') {
+      if (progress < 20) return 'Starting generation...';
+      if (progress < 50) return 'Processing script...';
+      if (progress < 80) return 'Creating scenes...';
+      return 'Almost done...';
+    }
+    return '';
   };
 
   return (
@@ -145,7 +161,7 @@ export function ScriptInput({ project, onScenesGenerated }: ScriptInputProps) {
                   Paste your story script below. The AI will analyze it and create visual scenes.
                 </CardDescription>
               </div>
-              <JobStatusBadge status={status} />
+              <JobStatusBadge status={status} scenesGenerated={scenesGenerated} />
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -164,22 +180,21 @@ Write or paste your complete story here. The AI will automatically split it into
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">
-                    {status === 'queued' ? 'Waiting in queue...' : 'Generating scenes...'}
+                    {getTimeEstimate()}
                   </span>
                   <span className="text-muted-foreground">
-                    {estimatedTimeRemaining !== null && estimatedTimeRemaining > 0
-                      ? `~${Math.ceil(estimatedTimeRemaining)}s remaining`
-                      : 'Almost done...'}
+                    {progress}%
+                    {scenesGenerated > 0 && ` • ${scenesGenerated} scenes`}
                   </span>
                 </div>
                 <Progress value={progress} className="h-2" />
               </div>
             )}
 
-            {/* Error message */}
-            {status === 'failed' && errorMessage && (
+            {/* Error message - user-friendly only */}
+            {status === 'failed' && failureReason && (
               <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
-                <p className="text-sm text-destructive">{errorMessage}</p>
+                <p className="text-sm text-destructive">{failureReason}</p>
               </div>
             )}
 
@@ -196,7 +211,8 @@ Write or paste your complete story here. The AI will automatically split it into
                   Save Draft
                 </Button>
                 
-                {status === 'failed' ? (
+                {/* Retry button - only visible when status is FAILED */}
+                {canRetry && (
                   <Button
                     onClick={handleRetry}
                     variant="outline"
@@ -205,8 +221,9 @@ Write or paste your complete story here. The AI will automatically split it into
                     <RefreshCw className="h-4 w-4" />
                     Retry
                   </Button>
-                ) : null}
+                )}
                 
+                {/* Generate button - disabled when QUEUED or PROCESSING */}
                 <Button
                   onClick={handleGenerateScenes}
                   disabled={isProcessing || !script.trim() || script.trim().length < 50}
@@ -300,6 +317,10 @@ Write or paste your complete story here. The AI will automatically split it into
             <div className="flex gap-2">
               <span className="text-primary">✓</span>
               <p>Auto-retry on failures (3 attempts)</p>
+            </div>
+            <div className="flex gap-2">
+              <span className="text-primary">✓</span>
+              <p>Resumes on page refresh</p>
             </div>
           </CardContent>
         </Card>

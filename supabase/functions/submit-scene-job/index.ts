@@ -14,6 +14,9 @@ const VALID_STORY_TYPES = ['kids', 'bedtime', 'moral'];
 const VALID_TONES = ['calm', 'emotional', 'dramatic'];
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// CRITICAL: Job timeout in milliseconds (5 minutes)
+const MAX_JOB_TIME_MS = 5 * 60 * 1000;
+
 // Generate script hash for caching
 async function generateScriptHash(script: string, language: string, storyType: string, tone: string): Promise<string> {
   const content = `${script.trim().toLowerCase()}|${language}|${storyType}|${tone}`;
@@ -36,7 +39,7 @@ serve(async (req) => {
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       console.error('Missing or invalid Authorization header');
       return new Response(
-        JSON.stringify({ error: 'Missing or invalid Authorization header' }),
+        JSON.stringify({ error: 'Authentication required' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -68,7 +71,7 @@ serve(async (req) => {
       body = await req.json();
     } catch {
       return new Response(
-        JSON.stringify({ error: 'Invalid JSON body' }),
+        JSON.stringify({ error: 'Invalid request format' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -78,7 +81,7 @@ serve(async (req) => {
     // Validate projectId
     if (!projectId || typeof projectId !== 'string' || !UUID_REGEX.test(projectId)) {
       return new Response(
-        JSON.stringify({ error: 'Invalid or missing projectId' }),
+        JSON.stringify({ error: 'Invalid project' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -86,7 +89,7 @@ serve(async (req) => {
     // Validate script
     if (!script || typeof script !== 'string') {
       return new Response(
-        JSON.stringify({ error: 'Missing or invalid script' }),
+        JSON.stringify({ error: 'Script is required' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -144,7 +147,7 @@ serve(async (req) => {
     if (rateLimitError) {
       console.error('Rate limit check failed:', rateLimitError.message);
       return new Response(
-        JSON.stringify({ error: 'Rate limit check failed' }),
+        JSON.stringify({ error: 'Service temporarily unavailable' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -152,29 +155,52 @@ serve(async (req) => {
     if (!rateLimitOk) {
       console.log(`User ${user.id} rate limited`);
       return new Response(
-        JSON.stringify({ error: 'Rate limit exceeded. Please wait a minute before trying again.' }),
+        JSON.stringify({ error: 'Please wait a moment before generating more scenes' }),
         { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // 5. Check for active job (one job per user)
-    const { data: hasActiveJob, error: activeJobError } = await supabaseAdmin
-      .rpc('has_active_job', { p_user_id: user.id });
+    // 5. CRITICAL: Check for active job with stale detection
+    const { data: activeJobs, error: activeJobError } = await supabaseAdmin
+      .rpc('get_active_job', { p_user_id: user.id });
 
     if (activeJobError) {
       console.error('Active job check failed:', activeJobError.message);
       return new Response(
-        JSON.stringify({ error: 'Active job check failed' }),
+        JSON.stringify({ error: 'Service temporarily unavailable' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    if (hasActiveJob) {
-      console.log(`User ${user.id} already has an active job`);
-      return new Response(
-        JSON.stringify({ error: 'You already have a job in progress. Please wait for it to complete.' }),
-        { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    if (activeJobs && activeJobs.length > 0) {
+      const activeJob = activeJobs[0];
+      const jobUpdatedAt = new Date(activeJob.updated_at).getTime();
+      const now = Date.now();
+      const jobAge = now - jobUpdatedAt;
+
+      console.log(`Found active job ${activeJob.job_id}, status: ${activeJob.status}, age: ${jobAge}ms`);
+
+      // Check if job is stale (older than MAX_JOB_TIME)
+      if (jobAge > MAX_JOB_TIME_MS) {
+        console.log(`Job ${activeJob.job_id} is stale (${jobAge}ms > ${MAX_JOB_TIME_MS}ms), marking as failed`);
+        
+        // Mark stale job as failed
+        await supabaseAdmin.rpc('mark_job_as_stale', { p_job_id: activeJob.job_id });
+        
+        // Continue to create new job
+      } else {
+        // Return 409 with existing job info - NOT an error, frontend should resume polling
+        console.log(`User ${user.id} already has an active job ${activeJob.job_id}`);
+        return new Response(
+          JSON.stringify({
+            jobId: activeJob.job_id,
+            status: activeJob.status,
+            existingJob: true,
+            message: 'A job is already in progress'
+          }),
+          { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
     }
 
     // 6. Generate script hash and check cache
@@ -207,6 +233,8 @@ serve(async (req) => {
           script_content: sanitizedScript,
           script_hash: scriptHash,
           status: 'completed',
+          progress: 100,
+          scenes_generated: Array.isArray(cachedResult.cached_scenes) ? cachedResult.cached_scenes.length : 0,
           started_at: new Date().toISOString(),
           completed_at: new Date().toISOString(),
         })
@@ -216,7 +244,7 @@ serve(async (req) => {
       if (jobError) {
         console.error('Failed to create job record:', jobError.message);
         return new Response(
-          JSON.stringify({ error: 'Failed to create job' }),
+          JSON.stringify({ error: 'Failed to process request' }),
           { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
@@ -226,9 +254,11 @@ serve(async (req) => {
           jobId: job.id,
           status: 'completed',
           cached: true,
+          progress: 100,
+          scenesGenerated: Array.isArray(cachedResult.cached_scenes) ? cachedResult.cached_scenes.length : 0,
           scenes: cachedResult.cached_scenes,
         }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -241,6 +271,8 @@ serve(async (req) => {
         script_content: sanitizedScript,
         script_hash: scriptHash,
         status: 'queued',
+        progress: 0,
+        scenes_generated: 0,
       })
       .select('id')
       .single();
@@ -274,20 +306,22 @@ serve(async (req) => {
       }),
     }).catch(err => console.error('Worker trigger failed:', err));
 
-    // 9. Return jobId immediately
+    // 9. Return jobId immediately with 202 Accepted
     return new Response(
       JSON.stringify({
         jobId: newJob.id,
         status: 'queued',
         cached: false,
+        progress: 0,
+        scenesGenerated: 0,
       }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { status: 202, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
   } catch (error) {
     console.error('Submit job error:', error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      JSON.stringify({ error: 'An unexpected error occurred. Please try again.' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
