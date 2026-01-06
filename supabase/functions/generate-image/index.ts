@@ -4,7 +4,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 /**
  * Generate Image Edge Function
  * 
- * Uses Google Gemini Imagen API directly with user-provided API key.
+ * Uses Lovable AI Gateway (Gemini image generation model).
  * Includes authentication, authorization, and input validation.
  */
 
@@ -13,7 +13,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const IMAGEN_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict";
+const LOVABLE_AI_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
 
 // Valid enum values from database
 const VALID_STYLES = ["cartoon", "storybook", "kids_illustration"];
@@ -126,14 +126,14 @@ serve(async (req) => {
       );
     }
 
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
-    if (!GEMINI_API_KEY) {
-      console.error("GEMINI_API_KEY is not configured");
+    if (!LOVABLE_API_KEY) {
+      console.error("LOVABLE_API_KEY is not configured");
       return new Response(
         JSON.stringify({ 
           error: "API key not configured", 
-          message: "Gemini API key is not configured." 
+          message: "Lovable AI API key is not configured." 
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -155,54 +155,92 @@ serve(async (req) => {
       exciting: "dynamic action, vibrant energy",
     };
 
-    const prompt = `${sanitizedDescription}. Style: ${stylePrompts[validatedStyle]}. Mood: ${moodPrompts[validatedMood]}. High quality, detailed illustration suitable for children's story video.`;
+    const prompt = `${sanitizedDescription}. Style: ${stylePrompts[validatedStyle]}. Mood: ${moodPrompts[validatedMood]}. High quality, detailed illustration suitable for children's story video. 16:9 aspect ratio.`;
 
-    console.log("Generating image with Gemini Imagen:", prompt.substring(0, 100) + "...");
+    console.log("Generating image with Lovable AI (Gemini):", prompt.substring(0, 100) + "...");
 
-    const response = await fetch(`${IMAGEN_API_URL}?key=${GEMINI_API_KEY}`, {
+    // Use Gemini image generation model via Lovable AI
+    const response = await fetch(LOVABLE_AI_URL, {
       method: "POST",
       headers: {
+        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        instances: [{ prompt }],
-        parameters: {
-          sampleCount: 1,
-          aspectRatio: "16:9",
-          safetyFilterLevel: "block_low_and_above",
-          personGeneration: "allow_adult"
-        }
+        model: "google/gemini-2.5-flash-image",
+        messages: [
+          { role: "user", content: prompt }
+        ],
       }),
     });
 
     if (response.status === 429) {
-      console.error("Rate limit exceeded on Gemini API");
+      console.error("Rate limit exceeded on Lovable AI");
       return new Response(
         JSON.stringify({ 
           error: "Rate limit exceeded", 
-          message: "Too many requests to Gemini API. Please wait a minute and try again." 
+          message: "Too many requests. Please wait a moment and try again." 
         }),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
+    if (response.status === 402) {
+      console.error("Payment required for Lovable AI");
+      return new Response(
+        JSON.stringify({ 
+          error: "Payment required", 
+          message: "AI credits exhausted. Please add credits to continue." 
+        }),
+        { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("Gemini Imagen API error:", response.status, errorText);
+      console.error("Lovable AI error:", response.status, errorText);
       return new Response(
         JSON.stringify({ 
           error: "AI request failed", 
-          message: `Gemini API returned status ${response.status}` 
+          message: `AI service returned status ${response.status}` 
         }),
         { status: response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const data = await response.json();
-    const imageData = data.predictions?.[0]?.bytesBase64Encoded;
+    console.log("Lovable AI response structure:", JSON.stringify(data).substring(0, 500));
+
+    // Extract image from response - Gemini image model returns base64 in content
+    const content = data.choices?.[0]?.message?.content;
+    
+    // Check if content contains an image (base64 encoded)
+    let imageData: string | null = null;
+    
+    if (typeof content === 'string') {
+      // Try to extract base64 image data from markdown or direct base64
+      const base64Match = content.match(/data:image\/[^;]+;base64,([A-Za-z0-9+/=]+)/);
+      if (base64Match) {
+        imageData = base64Match[1];
+      } else if (content.match(/^[A-Za-z0-9+/=]+$/)) {
+        // Direct base64 string
+        imageData = content;
+      }
+    } else if (Array.isArray(content)) {
+      // Handle array content format
+      for (const item of content) {
+        if (item.type === 'image' && item.image_url?.url) {
+          const base64Match = item.image_url.url.match(/data:image\/[^;]+;base64,([A-Za-z0-9+/=]+)/);
+          if (base64Match) {
+            imageData = base64Match[1];
+            break;
+          }
+        }
+      }
+    }
 
     if (!imageData) {
-      console.error("No image in Gemini response:", JSON.stringify(data));
+      console.error("No image in Lovable AI response:", JSON.stringify(data).substring(0, 1000));
       throw new Error("No image generated from AI service.");
     }
 
