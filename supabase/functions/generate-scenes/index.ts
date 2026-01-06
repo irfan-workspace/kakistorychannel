@@ -6,14 +6,12 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+const LOVABLE_AI_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
 
-// Valid enum values from database
 const VALID_LANGUAGES = ["hindi", "hinglish", "english"];
 const VALID_STORY_TYPES = ["kids", "bedtime", "moral"];
 const VALID_TONES = ["calm", "emotional", "dramatic"];
 
-// Input constraints
 const MAX_SCRIPT_LENGTH = 10000;
 const MIN_SCRIPT_LENGTH = 10;
 
@@ -27,12 +25,10 @@ serve(async (req) => {
   }
 
   try {
-    // Authentication check
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) {
-      console.error("No authorization header provided");
       return new Response(
-        JSON.stringify({ error: "Unauthorized", message: "Authentication required" }),
+        JSON.stringify({ error: "Authentication required" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -40,30 +36,26 @@ serve(async (req) => {
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
     const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
-    // Create client with user's auth token
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } }
     });
 
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) {
-      console.error("Authentication failed:", authError?.message);
       return new Response(
-        JSON.stringify({ error: "Unauthorized", message: "Invalid or expired token" }),
+        JSON.stringify({ error: "Invalid or expired token" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     console.log(`Authenticated user: ${user.id}`);
 
-    // Parse and validate input
     const body = await req.json();
     const { script, language, storyType, tone } = body;
 
-    // Validate script
     if (!script || typeof script !== 'string') {
       return new Response(
-        JSON.stringify({ error: "Bad Request", message: "Script is required and must be a string" }),
+        JSON.stringify({ error: "Script is required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -71,32 +63,27 @@ serve(async (req) => {
     const sanitizedScript = sanitizeText(script);
     if (sanitizedScript.length < MIN_SCRIPT_LENGTH) {
       return new Response(
-        JSON.stringify({ error: "Bad Request", message: `Script must be at least ${MIN_SCRIPT_LENGTH} characters` }),
+        JSON.stringify({ error: `Script must be at least ${MIN_SCRIPT_LENGTH} characters` }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     if (sanitizedScript.length > MAX_SCRIPT_LENGTH) {
       return new Response(
-        JSON.stringify({ error: "Bad Request", message: `Script must be less than ${MAX_SCRIPT_LENGTH} characters` }),
+        JSON.stringify({ error: `Script must be less than ${MAX_SCRIPT_LENGTH} characters` }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Validate language
     const validatedLanguage = VALID_LANGUAGES.includes(language) ? language : "english";
     const validatedStoryType = VALID_STORY_TYPES.includes(storyType) ? storyType : "kids";
     const validatedTone = VALID_TONES.includes(tone) ? tone : "calm";
 
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
-    if (!GEMINI_API_KEY) {
-      console.error("GEMINI_API_KEY is not configured");
+    if (!LOVABLE_API_KEY) {
       return new Response(
-        JSON.stringify({ 
-          error: "API key not configured", 
-          message: "Gemini API key is not configured." 
-        }),
+        JSON.stringify({ error: "Lovable API key not configured" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -127,59 +114,54 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
   ]
 }`;
 
-    console.log("Calling Gemini API for scene generation...");
+    console.log("Calling Lovable AI for scene generation...");
 
-    const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+    const response = await fetch(LOVABLE_AI_URL, {
       method: "POST",
       headers: {
+        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        contents: [{
-          parts: [{
-            text: `${systemPrompt}\n\nAnalyze this story script and create scenes:\n\n${sanitizedScript}`
-          }]
-        }],
-        generationConfig: {
-          temperature: 0.7,
-          topP: 0.9,
-          maxOutputTokens: 4096,
-        },
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: `Analyze this story script and create scenes:\n\n${sanitizedScript}` }
+        ],
       }),
     });
 
     if (response.status === 429) {
-      console.error("Rate limit exceeded on Gemini API");
       return new Response(
-        JSON.stringify({ 
-          error: "Rate limit exceeded", 
-          message: "Too many requests. Please wait a moment and try again." 
-        }),
+        JSON.stringify({ error: "Rate limit exceeded. Please wait a moment and try again." }),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (response.status === 402) {
+      return new Response(
+        JSON.stringify({ error: "AI credits exhausted. Please add credits to continue." }),
+        { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("Gemini API error:", response.status, errorText);
+      console.error("Lovable AI error:", response.status, errorText);
       return new Response(
-        JSON.stringify({ 
-          error: "AI request failed", 
-          message: `AI service returned status ${response.status}` 
-        }),
+        JSON.stringify({ error: `AI service error: ${response.status}` }),
         { status: response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const data = await response.json();
-    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const content = data.choices?.[0]?.message?.content;
 
     if (!content) {
-      console.error("No content in Gemini response:", JSON.stringify(data));
+      console.error("No content in response:", JSON.stringify(data));
       throw new Error("No content in AI response");
     }
 
-    // Parse JSON response (handle potential markdown code blocks)
     let parsed;
     try {
       const cleanContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
@@ -189,7 +171,7 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
       throw new Error("Invalid JSON response from AI");
     }
 
-    console.log(`Generated ${parsed.scenes?.length || 0} scenes successfully for user ${user.id}`);
+    console.log(`Generated ${parsed.scenes?.length || 0} scenes for user ${user.id}`);
 
     return new Response(JSON.stringify(parsed), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -197,10 +179,7 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
   } catch (error) {
     console.error("Generate scenes error:", error);
     return new Response(
-      JSON.stringify({ 
-        error: "Failed to generate scenes", 
-        message: error instanceof Error ? error.message : "Unknown error occurred" 
-      }),
+      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

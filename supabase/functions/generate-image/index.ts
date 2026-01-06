@@ -6,9 +6,8 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp-image-generation:generateContent";
+const LOVABLE_AI_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
 
-// Valid enum values from database
 const VALID_STYLES = ["cartoon", "storybook", "kids_illustration"];
 const VALID_MOODS = ["calm", "emotional", "dramatic", "happy", "tense", "sad", "exciting"];
 
@@ -28,7 +27,7 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) {
       return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
+        JSON.stringify({ error: "Authentication required" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -44,7 +43,7 @@ serve(async (req) => {
     const { data: { user }, error: authError } = await userSupabase.auth.getUser();
     if (authError || !user) {
       return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
+        JSON.stringify({ error: "Invalid or expired token" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -102,11 +101,11 @@ serve(async (req) => {
       );
     }
 
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
-    if (!GEMINI_API_KEY) {
+    if (!LOVABLE_API_KEY) {
       return new Response(
-        JSON.stringify({ error: "Gemini API key not configured" }),
+        JSON.stringify({ error: "Lovable API key not configured" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -131,45 +130,62 @@ serve(async (req) => {
 
     console.log(`Generating image for scene ${sceneId}`);
 
-    const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+    const response = await fetch(LOVABLE_AI_URL, {
       method: "POST",
       headers: {
+        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        contents: [{
-          parts: [{ text: prompt }]
-        }],
-        generationConfig: {
-          responseModalities: ["TEXT", "IMAGE"],
-        },
+        model: "google/gemini-2.5-flash-image",
+        messages: [
+          { role: "user", content: prompt }
+        ],
+        modalities: ["image", "text"],
       }),
     });
 
     if (response.status === 429) {
       return new Response(
-        JSON.stringify({ error: "Too many requests. Please wait a moment and try again." }),
+        JSON.stringify({ error: "Rate limit exceeded. Please wait a moment and try again." }),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (response.status === 402) {
+      return new Response(
+        JSON.stringify({ error: "AI credits exhausted. Please add credits to continue." }),
+        { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("Gemini API error:", response.status, errorText);
+      console.error("Lovable AI error:", response.status, errorText);
       return new Response(
-        JSON.stringify({ error: `Image generation failed: ${response.status}` }),
+        JSON.stringify({ error: `AI service error: ${response.status}` }),
         { status: response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const data = await response.json();
     
-    // Extract image from response
-    const parts = data.candidates?.[0]?.content?.parts || [];
-    const imagePart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'));
+    // Extract image from Lovable AI response
+    const images = data.choices?.[0]?.message?.images;
+    let imageData: string | null = null;
 
-    if (!imagePart?.inlineData?.data) {
-      console.error("No image in response:", JSON.stringify(data));
+    if (images && images.length > 0) {
+      const imageUrl = images[0]?.image_url?.url;
+      if (imageUrl?.startsWith('data:image/')) {
+        const base64Match = imageUrl.match(/data:image\/[^;]+;base64,(.+)/);
+        if (base64Match) {
+          imageData = base64Match[1];
+        }
+      }
+    }
+
+    if (!imageData) {
+      console.error("No image in response:", JSON.stringify(data).substring(0, 500));
       return new Response(
         JSON.stringify({ error: "No image generated" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -177,15 +193,13 @@ serve(async (req) => {
     }
 
     // Upload to Supabase Storage
-    const imageData = Uint8Array.from(atob(imagePart.inlineData.data), c => c.charCodeAt(0));
-    const mimeType = imagePart.inlineData.mimeType || 'image/png';
-    const extension = mimeType.split('/')[1] || 'png';
-    const fileName = `${sceneId}/${Date.now()}.${extension}`;
+    const imageBuffer = Uint8Array.from(atob(imageData), c => c.charCodeAt(0));
+    const fileName = `${sceneId}/${Date.now()}.png`;
 
     const { error: uploadError } = await supabase.storage
       .from('project-assets')
-      .upload(fileName, imageData, {
-        contentType: mimeType,
+      .upload(fileName, imageBuffer, {
+        contentType: 'image/png',
         upsert: true,
       });
 
