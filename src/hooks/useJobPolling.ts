@@ -85,6 +85,15 @@ export function useJobPolling(projectId: string | null, options: UseJobPollingOp
     if (!mountedRef.current) return true;
 
     try {
+      // Check if user is still authenticated before polling
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        console.log('No active session, stopping polling');
+        stopPolling();
+        if (projectId) clearJobFromSession(projectId);
+        return true;
+      }
+
       const { data, error } = await supabase.functions.invoke('check-job-status', {
         body: { jobId },
       });
@@ -93,6 +102,15 @@ export function useJobPolling(projectId: string | null, options: UseJobPollingOp
 
       if (error) {
         console.error('Job status check error:', error);
+        
+        // Check if it's an auth error
+        const errorMessage = error.message?.toLowerCase() || '';
+        if (errorMessage.includes('401') || errorMessage.includes('auth') || errorMessage.includes('session')) {
+          console.log('Auth error during polling, will retry after session check');
+          // Don't fail permanently on auth errors - the session check above will handle it
+          return false;
+        }
+        
         // Don't fail immediately on transient errors
         return false;
       }
@@ -326,16 +344,28 @@ export function useJobPolling(projectId: string | null, options: UseJobPollingOp
   useEffect(() => {
     if (!projectId) return;
 
-    const savedJob = loadJobFromSession(projectId);
-    if (savedJob && savedJob.jobId && savedJob.status !== 'completed' && savedJob.status !== 'failed') {
-      console.log(`Resuming job ${savedJob.jobId} from session (status: ${savedJob.status})`);
-      setJobState(prev => ({
-        ...prev,
-        jobId: savedJob.jobId,
-        status: savedJob.status,
-      }));
-      startPolling(savedJob.jobId, savedJob.status);
-    }
+    const resumePolling = async () => {
+      // Wait for session to be ready before resuming
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        console.log('No session available, clearing saved job state');
+        clearJobFromSession(projectId);
+        return;
+      }
+
+      const savedJob = loadJobFromSession(projectId);
+      if (savedJob && savedJob.jobId && savedJob.status !== 'completed' && savedJob.status !== 'failed') {
+        console.log(`Resuming job ${savedJob.jobId} from session (status: ${savedJob.status})`);
+        setJobState(prev => ({
+          ...prev,
+          jobId: savedJob.jobId,
+          status: savedJob.status,
+        }));
+        startPolling(savedJob.jobId, savedJob.status);
+      }
+    };
+
+    resumePolling();
   }, [projectId, startPolling]);
 
   // Cleanup on unmount
