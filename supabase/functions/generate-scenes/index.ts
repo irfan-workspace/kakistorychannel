@@ -15,14 +15,83 @@ const VALID_TONES = ["calm", "emotional", "dramatic"];
 const MAX_SCRIPT_LENGTH = 10000;
 const MIN_SCRIPT_LENGTH = 10;
 
+// Cost pricing configuration (USD)
+const AI_PRICING = {
+  "gemini-2.5-flash": {
+    input_per_1k: 0.00035,
+    output_per_1k: 0.00105,
+  },
+};
+
+const USD_TO_INR = 83;
+
 function sanitizeText(text: string): string {
   return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
+}
+
+// Estimate tokens (rough: 1 token ≈ 4 chars for English, 2-3 for Hindi)
+function estimateTokens(text: string, isOutput = false): number {
+  const avgCharsPerToken = 4;
+  return Math.ceil(text.length / avgCharsPerToken);
+}
+
+async function logUsage(
+  supabase: any,
+  userId: string,
+  projectId: string | null,
+  feature: string,
+  provider: string,
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  status: "success" | "failed",
+  errorMessage?: string
+) {
+  try {
+    const totalTokens = inputTokens + outputTokens;
+    const pricing = AI_PRICING["gemini-2.5-flash"];
+    const costUsd = (inputTokens / 1000) * pricing.input_per_1k + (outputTokens / 1000) * pricing.output_per_1k;
+    const costInr = costUsd * USD_TO_INR;
+
+    await supabase.from('api_usage_logs').insert({
+      user_id: userId,
+      project_id: projectId,
+      provider,
+      model,
+      feature,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      total_tokens: totalTokens,
+      api_calls: 1,
+      cost_usd: costUsd,
+      cost_inr: costInr,
+      status,
+      error_message: errorMessage,
+    });
+
+    console.log(`Usage logged: ${feature}, tokens: ${totalTokens}, cost: $${costUsd.toFixed(6)}`);
+  } catch (err) {
+    console.error("Failed to log usage:", err);
+    // Don't block main operation if logging fails
+  }
 }
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
+
+  const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+  const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+  const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+  // Service role client for logging
+  const serviceSupabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+  let userId: string | null = null;
+  let projectId: string | null = null;
+  let inputTokens = 0;
+  let outputTokens = 0;
 
   try {
     const authHeader = req.headers.get('Authorization');
@@ -32,9 +101,6 @@ serve(async (req) => {
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
-    const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-    const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } }
@@ -48,10 +114,12 @@ serve(async (req) => {
       );
     }
 
+    userId = user.id;
     console.log(`Authenticated user: ${user.id}`);
 
     const body = await req.json();
-    const { script, language, storyType, tone } = body;
+    const { script, language, storyType, tone, projectId: reqProjectId } = body;
+    projectId = reqProjectId || null;
 
     if (!script || typeof script !== 'string') {
       return new Response(
@@ -114,6 +182,11 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
   ]
 }`;
 
+    const userMessage = `Analyze this story script and create scenes:\n\n${sanitizedScript}`;
+    
+    // Estimate input tokens
+    inputTokens = estimateTokens(systemPrompt + userMessage);
+
     console.log("Calling Lovable AI for scene generation...");
 
     const response = await fetch(LOVABLE_AI_URL, {
@@ -126,12 +199,13 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
         model: "google/gemini-2.5-flash",
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: `Analyze this story script and create scenes:\n\n${sanitizedScript}` }
+          { role: "user", content: userMessage }
         ],
       }),
     });
 
     if (response.status === 429) {
+      await logUsage(serviceSupabase, userId, projectId, "generate-scenes", "google", "gemini-2.5-flash", inputTokens, 0, "failed", "Rate limit exceeded");
       return new Response(
         JSON.stringify({ error: "Rate limit exceeded. Please wait a moment and try again." }),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -139,6 +213,7 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
     }
 
     if (response.status === 402) {
+      await logUsage(serviceSupabase, userId, projectId, "generate-scenes", "google", "gemini-2.5-flash", inputTokens, 0, "failed", "Credits exhausted");
       return new Response(
         JSON.stringify({ error: "AI credits exhausted. Please add credits to continue." }),
         { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -148,6 +223,7 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
     if (!response.ok) {
       const errorText = await response.text();
       console.error("Lovable AI error:", response.status, errorText);
+      await logUsage(serviceSupabase, userId, projectId, "generate-scenes", "google", "gemini-2.5-flash", inputTokens, 0, "failed", `API error: ${response.status}`);
       return new Response(
         JSON.stringify({ error: `AI service error: ${response.status}` }),
         { status: response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -157,8 +233,18 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content;
 
+    // Extract token usage from response if available
+    const usage = data.usage;
+    if (usage) {
+      inputTokens = usage.prompt_tokens || inputTokens;
+      outputTokens = usage.completion_tokens || estimateTokens(content || "", true);
+    } else {
+      outputTokens = estimateTokens(content || "", true);
+    }
+
     if (!content) {
       console.error("No content in response:", JSON.stringify(data));
+      await logUsage(serviceSupabase, userId, projectId, "generate-scenes", "google", "gemini-2.5-flash", inputTokens, outputTokens, "failed", "No content in response");
       throw new Error("No content in AI response");
     }
 
@@ -168,8 +254,12 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
       parsed = JSON.parse(cleanContent);
     } catch (parseError) {
       console.error("Failed to parse AI response:", content);
+      await logUsage(serviceSupabase, userId, projectId, "generate-scenes", "google", "gemini-2.5-flash", inputTokens, outputTokens, "failed", "Invalid JSON response");
       throw new Error("Invalid JSON response from AI");
     }
+
+    // Log successful usage
+    await logUsage(serviceSupabase, userId, projectId, "generate-scenes", "google", "gemini-2.5-flash", inputTokens, outputTokens, "success");
 
     console.log(`Generated ${parsed.scenes?.length || 0} scenes for user ${user.id}`);
 
@@ -178,6 +268,12 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no code 
     });
   } catch (error) {
     console.error("Generate scenes error:", error);
+    
+    // Log failed usage
+    if (userId) {
+      await logUsage(serviceSupabase, userId, projectId, "generate-scenes", "google", "gemini-2.5-flash", inputTokens, outputTokens, "failed", error instanceof Error ? error.message : "Unknown error");
+    }
+    
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

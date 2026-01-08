@@ -14,14 +14,71 @@ const VALID_MOODS = ["calm", "emotional", "dramatic", "happy", "tense", "sad", "
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_DESCRIPTION_LENGTH = 2000;
 
+// Cost pricing configuration (USD)
+const AI_PRICING = {
+  "gemini-image": {
+    per_image: 0.04,
+  },
+};
+
+const USD_TO_INR = 83;
+
 function sanitizeText(text: string): string {
   return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
+}
+
+async function logUsage(
+  supabase: any,
+  userId: string,
+  projectId: string | null,
+  sceneId: string | null,
+  feature: string,
+  provider: string,
+  model: string,
+  status: "success" | "failed",
+  errorMessage?: string
+) {
+  try {
+    const costUsd = AI_PRICING["gemini-image"].per_image;
+    const costInr = costUsd * USD_TO_INR;
+
+    await supabase.from('api_usage_logs').insert({
+      user_id: userId,
+      project_id: projectId,
+      scene_id: sceneId,
+      provider,
+      model,
+      feature,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      api_calls: 1,
+      cost_usd: status === "success" ? costUsd : 0,
+      cost_inr: status === "success" ? costInr : 0,
+      status,
+      error_message: errorMessage,
+    });
+
+    console.log(`Usage logged: ${feature}, cost: $${costUsd.toFixed(4)}`);
+  } catch (err) {
+    console.error("Failed to log usage:", err);
+  }
 }
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
+
+  const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+  const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+  const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+  const serviceSupabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+  let userId: string | null = null;
+  let projectId: string | null = null;
+  let sceneId: string | null = null;
 
   try {
     const authHeader = req.headers.get('Authorization');
@@ -31,10 +88,6 @@ serve(async (req) => {
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
-    const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-    const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
     const userSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } }
@@ -48,10 +101,12 @@ serve(async (req) => {
       );
     }
 
+    userId = user.id;
     console.log(`Authenticated user: ${user.id}`);
 
     const body = await req.json();
-    const { sceneId, visualDescription, style, mood } = body;
+    const { sceneId: reqSceneId, visualDescription, style, mood } = body;
+    sceneId = reqSceneId;
 
     if (!sceneId || typeof sceneId !== 'string' || !UUID_REGEX.test(sceneId)) {
       return new Response(
@@ -78,9 +133,7 @@ serve(async (req) => {
     const validatedStyle = VALID_STYLES.includes(style) ? style : "cartoon";
     const validatedMood = VALID_MOODS.includes(mood) ? mood : "calm";
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-    const { data: scene, error: sceneError } = await supabase
+    const { data: scene, error: sceneError } = await serviceSupabase
       .from('scenes')
       .select('project_id, projects(user_id)')
       .eq('id', sceneId)
@@ -93,6 +146,7 @@ serve(async (req) => {
       );
     }
 
+    projectId = scene.project_id;
     const projectUserId = (scene.projects as any)?.user_id;
     if (projectUserId !== user.id) {
       return new Response(
@@ -146,6 +200,7 @@ serve(async (req) => {
     });
 
     if (response.status === 429) {
+      await logUsage(serviceSupabase, userId, projectId, sceneId, "generate-image", "google", "gemini-2.5-flash-image-preview", "failed", "Rate limit exceeded");
       return new Response(
         JSON.stringify({ error: "Rate limit exceeded. Please wait a moment and try again." }),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -153,6 +208,7 @@ serve(async (req) => {
     }
 
     if (response.status === 402) {
+      await logUsage(serviceSupabase, userId, projectId, sceneId, "generate-image", "google", "gemini-2.5-flash-image-preview", "failed", "Credits exhausted");
       return new Response(
         JSON.stringify({ error: "AI credits exhausted. Please add credits to continue." }),
         { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -162,6 +218,7 @@ serve(async (req) => {
     if (!response.ok) {
       const errorText = await response.text();
       console.error("Lovable AI error:", response.status, errorText);
+      await logUsage(serviceSupabase, userId, projectId, sceneId, "generate-image", "google", "gemini-2.5-flash-image-preview", "failed", `API error: ${response.status}`);
       return new Response(
         JSON.stringify({ error: `AI service error: ${response.status}` }),
         { status: response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -170,7 +227,6 @@ serve(async (req) => {
 
     const data = await response.json();
     
-    // Extract image from Lovable AI response
     const images = data.choices?.[0]?.message?.images;
     let imageData: string | null = null;
 
@@ -186,17 +242,17 @@ serve(async (req) => {
 
     if (!imageData) {
       console.error("No image in response:", JSON.stringify(data).substring(0, 500));
+      await logUsage(serviceSupabase, userId, projectId, sceneId, "generate-image", "google", "gemini-2.5-flash-image-preview", "failed", "No image generated");
       return new Response(
         JSON.stringify({ error: "No image generated" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Upload to Supabase Storage
     const imageBuffer = Uint8Array.from(atob(imageData), c => c.charCodeAt(0));
     const fileName = `${sceneId}/${Date.now()}.png`;
 
-    const { error: uploadError } = await supabase.storage
+    const { error: uploadError } = await serviceSupabase.storage
       .from('project-assets')
       .upload(fileName, imageBuffer, {
         contentType: 'image/png',
@@ -205,15 +261,19 @@ serve(async (req) => {
 
     if (uploadError) {
       console.error("Upload error:", uploadError);
+      await logUsage(serviceSupabase, userId, projectId, sceneId, "generate-image", "google", "gemini-2.5-flash-image-preview", "failed", "Failed to upload image");
       return new Response(
         JSON.stringify({ error: "Failed to upload image" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const { data: urlData } = supabase.storage
+    const { data: urlData } = serviceSupabase.storage
       .from('project-assets')
       .getPublicUrl(fileName);
+
+    // Log successful usage
+    await logUsage(serviceSupabase, userId, projectId, sceneId, "generate-image", "google", "gemini-2.5-flash-image-preview", "success");
 
     console.log(`Image generated for scene ${sceneId}: ${urlData.publicUrl}`);
 
@@ -223,6 +283,11 @@ serve(async (req) => {
     );
   } catch (error) {
     console.error("Generate image error:", error);
+    
+    if (userId) {
+      await logUsage(serviceSupabase, userId, projectId, sceneId, "generate-image", "google", "gemini-2.5-flash-image-preview", "failed", error instanceof Error ? error.message : "Unknown error");
+    }
+    
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
