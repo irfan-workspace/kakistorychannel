@@ -14,6 +14,81 @@ export type Database = {
   }
   public: {
     Tables: {
+      api_usage_logs: {
+        Row: {
+          api_calls: number | null
+          cost_inr: number | null
+          cost_usd: number | null
+          created_at: string
+          error_message: string | null
+          feature: string
+          id: string
+          input_tokens: number | null
+          metadata: Json | null
+          model: string
+          output_tokens: number | null
+          project_id: string | null
+          provider: string
+          scene_id: string | null
+          status: string
+          total_tokens: number | null
+          user_id: string
+        }
+        Insert: {
+          api_calls?: number | null
+          cost_inr?: number | null
+          cost_usd?: number | null
+          created_at?: string
+          error_message?: string | null
+          feature: string
+          id?: string
+          input_tokens?: number | null
+          metadata?: Json | null
+          model: string
+          output_tokens?: number | null
+          project_id?: string | null
+          provider: string
+          scene_id?: string | null
+          status?: string
+          total_tokens?: number | null
+          user_id: string
+        }
+        Update: {
+          api_calls?: number | null
+          cost_inr?: number | null
+          cost_usd?: number | null
+          created_at?: string
+          error_message?: string | null
+          feature?: string
+          id?: string
+          input_tokens?: number | null
+          metadata?: Json | null
+          model?: string
+          output_tokens?: number | null
+          project_id?: string | null
+          provider?: string
+          scene_id?: string | null
+          status?: string
+          total_tokens?: number | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "api_usage_logs_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "api_usage_logs_scene_id_fkey"
+            columns: ["scene_id"]
+            isOneToOne: false
+            referencedRelation: "scenes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       generation_jobs: {
         Row: {
           completed_at: string | null
@@ -394,7 +469,63 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      daily_cost_summary: {
+        Row: {
+          api_calls: number | null
+          cost_inr: number | null
+          cost_usd: number | null
+          date: string | null
+          feature: string | null
+          model: string | null
+          provider: string | null
+          tokens_used: number | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
+      feature_cost_breakdown: {
+        Row: {
+          avg_cost_per_call_inr: number | null
+          avg_cost_per_call_usd: number | null
+          feature: string | null
+          total_calls: number | null
+          total_cost_inr: number | null
+          total_cost_usd: number | null
+          total_tokens: number | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
+      platform_usage_summary: {
+        Row: {
+          date: string | null
+          image_generations: number | null
+          scene_generations: number | null
+          total_api_calls: number | null
+          total_cost_inr: number | null
+          total_cost_usd: number | null
+          total_tokens: number | null
+          unique_users: number | null
+          video_exports: number | null
+          voiceover_generations: number | null
+        }
+        Relationships: []
+      }
+      user_usage_summary: {
+        Row: {
+          failed_calls: number | null
+          last_api_call: string | null
+          successful_calls: number | null
+          total_api_calls: number | null
+          total_cost_inr: number | null
+          total_cost_usd: number | null
+          total_input_tokens: number | null
+          total_output_tokens: number | null
+          total_tokens: number | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       check_rate_limit: {
@@ -412,6 +543,17 @@ export type Database = {
           project_id: string
           status: string
           updated_at: string
+        }[]
+      }
+      get_user_usage_stats: {
+        Args: { p_days?: number; p_user_id: string }
+        Returns: {
+          failed_calls: number
+          successful_calls: number
+          total_api_calls: number
+          total_cost_inr: number
+          total_cost_usd: number
+          total_tokens: number
         }[]
       }
       has_active_job: { Args: { p_user_id: string }; Returns: boolean }
