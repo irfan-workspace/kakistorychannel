@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { useProjects } from '@/hooks/useProjects';
 import { UsageAnalytics } from '@/components/dashboard/UsageAnalytics';
+import { CreditUsageBar } from '@/components/dashboard/CreditUsageBar';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -190,6 +191,9 @@ export default function Dashboard() {
             New Project
           </Button>
         </div>
+
+        {/* Credit Usage Bar */}
+        <CreditUsageBar />
 
         {/* Usage Analytics */}
         <UsageAnalytics />
