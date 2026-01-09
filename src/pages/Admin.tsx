@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { supabase } from '@/integrations/supabase/client';
+import { AdminUsageAnalytics } from '@/components/admin/AdminUsageAnalytics';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -151,10 +152,15 @@ export default function Admin() {
         {/* Tabs */}
         <Tabs defaultValue="users">
           <TabsList>
+            <TabsTrigger value="analytics">API Analytics</TabsTrigger>
             <TabsTrigger value="users">Users</TabsTrigger>
             <TabsTrigger value="projects">Projects</TabsTrigger>
             <TabsTrigger value="usage">Usage Logs</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="analytics" className="space-y-4">
+            <AdminUsageAnalytics />
+          </TabsContent>
 
           <TabsContent value="users" className="space-y-4">
             <Card>
