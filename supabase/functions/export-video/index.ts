@@ -5,12 +5,18 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
  * Export Video Edge Function
  * 
  * Creates an interactive video player from scenes.
- * Includes authentication, authorization, and input validation.
+ * Includes authentication, authorization, input validation, and usage tracking.
  */
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+// Pricing configuration for export
+const EXPORT_PRICING = {
+  per_export: 0.01, // $0.01 per video export
+  usd_to_inr: 83,
 };
 
 interface SceneData {
@@ -33,6 +39,42 @@ const MIN_SCENE_DURATION = 1;
 
 // URL validation (basic check for http/https)
 const URL_REGEX = /^https?:\/\/.+/i;
+
+// Usage logging function
+async function logUsage(
+  supabase: any,
+  userId: string,
+  projectId: string,
+  status: 'success' | 'failed',
+  sceneCount: number,
+  errorMessage?: string
+) {
+  try {
+    const costUsd = EXPORT_PRICING.per_export;
+    const costInr = costUsd * EXPORT_PRICING.usd_to_inr;
+    
+    await supabase.from('api_usage_logs').insert({
+      user_id: userId,
+      project_id: projectId,
+      feature: 'export-video',
+      provider: 'internal',
+      model: 'video-player',
+      api_calls: 1,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      cost_usd: status === 'success' ? costUsd : 0,
+      cost_inr: status === 'success' ? costInr : 0,
+      status,
+      error_message: errorMessage,
+      metadata: { scene_count: sceneCount }
+    });
+    console.log(`Usage logged: ${status} export for user ${userId}`);
+  } catch (logError) {
+    console.error('Failed to log usage:', logError);
+    // Don't fail the main operation if logging fails
+  }
+}
 
 function validateSceneData(scene: any, index: number): { valid: boolean; error?: string } {
   if (!scene || typeof scene !== 'object') {
@@ -675,6 +717,9 @@ serve(async (req) => {
     console.log(`Video player created for user ${user.id}: ${playerUrlData.publicUrl}`);
     console.log(`Export completed successfully for project ${projectId}`);
 
+    // Log successful usage
+    await logUsage(supabase, user.id, projectId, 'success', validScenes.length);
+
     return new Response(
       JSON.stringify({ 
         videoUrl: playerUrlData.publicUrl,
@@ -687,6 +732,26 @@ serve(async (req) => {
     );
   } catch (error) {
     console.error("Export video error:", error);
+    
+    // Try to log failed usage if we have context
+    try {
+      const authHeader = req.headers.get('Authorization');
+      if (authHeader) {
+        const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+        const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+        const userSupabase = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_ANON_KEY")!, {
+          global: { headers: { Authorization: authHeader } }
+        });
+        const { data: { user } } = await userSupabase.auth.getUser();
+        if (user) {
+          await logUsage(supabase, user.id, '', 'failed', 0, error instanceof Error ? error.message : 'Unknown error');
+        }
+      }
+    } catch (logError) {
+      console.error('Failed to log error usage:', logError);
+    }
+    
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Failed to export video" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
