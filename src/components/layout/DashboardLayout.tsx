@@ -1,6 +1,7 @@
 import { ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
+import { useUsageAlerts } from '@/hooks/useUsageAlerts';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
@@ -38,6 +39,9 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const { user, profile, isAdmin, signOut } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  
+  // Initialize real-time usage alerts
+  useUsageAlerts();
 
   const handleSignOut = async () => {
     await signOut();
