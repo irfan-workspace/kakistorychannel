@@ -1,9 +1,11 @@
 import { useAuth } from '@/hooks/useAuth';
 import { useUsageStats } from '@/hooks/useUsageAnalytics';
+import { useNavigate } from 'react-router-dom';
 import { Progress } from '@/components/ui/progress';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Coins, TrendingUp, AlertTriangle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Coins, TrendingUp, AlertTriangle, CreditCard } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const CREDIT_LIMITS: Record<string, number> = {
@@ -21,12 +23,14 @@ const TIER_LABELS: Record<string, string> = {
 export function CreditUsageBar() {
   const { profile } = useAuth();
   const { data: usageStats, isLoading } = useUsageStats(30);
+  const navigate = useNavigate();
 
   const tier = profile?.subscription_tier || 'free';
   const creditLimit = CREDIT_LIMITS[tier] || CREDIT_LIMITS.free;
   const creditsRemaining = profile?.credits_balance ?? creditLimit;
   const creditsUsed = creditLimit - creditsRemaining;
   const usagePercentage = Math.min(100, Math.max(0, (creditsUsed / creditLimit) * 100));
+  const showPurchaseButton = usagePercentage >= 70;
 
   const getStatusColor = (percentage: number) => {
     if (percentage >= 90) return 'text-destructive';
@@ -130,6 +134,27 @@ export function CreditUsageBar() {
             <span>{usageStats.totalApiCalls} API calls this month</span>
             <span>•</span>
             <span>${usageStats.totalCostUsd.toFixed(2)} spent</span>
+          </div>
+        )}
+        {showPurchaseButton && (
+          <div className="pt-2">
+            <Button 
+              onClick={() => navigate('/subscription')}
+              size="sm"
+              className={cn(
+                "w-full gap-2",
+                usagePercentage >= 90 
+                  ? "bg-destructive hover:bg-destructive/90" 
+                  : "bg-primary hover:bg-primary/90"
+              )}
+            >
+              <CreditCard className="h-4 w-4" />
+              {usagePercentage >= 100 
+                ? 'Purchase Credits Now' 
+                : usagePercentage >= 90 
+                  ? 'Running Low - Get More Credits'
+                  : 'Top Up Credits'}
+            </Button>
           </div>
         )}
       </CardContent>
