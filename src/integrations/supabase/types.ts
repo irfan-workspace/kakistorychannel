@@ -545,6 +545,59 @@ export type Database = {
           updated_at: string
         }[]
       }
+      get_all_users_usage: {
+        Args: { p_user_id: string }
+        Returns: {
+          failed_calls: number
+          last_api_call: string
+          successful_calls: number
+          total_api_calls: number
+          total_cost_inr: number
+          total_cost_usd: number
+          total_tokens: number
+          user_id: string
+        }[]
+      }
+      get_platform_usage_summary: {
+        Args: { p_days?: number; p_user_id: string }
+        Returns: {
+          date: string
+          image_generations: number
+          scene_generations: number
+          total_api_calls: number
+          total_cost_inr: number
+          total_cost_usd: number
+          total_tokens: number
+          unique_users: number
+          video_exports: number
+          voiceover_generations: number
+        }[]
+      }
+      get_user_daily_costs: {
+        Args: { p_days?: number; p_user_id: string }
+        Returns: {
+          api_calls: number
+          cost_inr: number
+          cost_usd: number
+          date: string
+          feature: string
+          model: string
+          provider: string
+          tokens_used: number
+        }[]
+      }
+      get_user_feature_costs: {
+        Args: { p_user_id: string }
+        Returns: {
+          avg_cost_per_call_inr: number
+          avg_cost_per_call_usd: number
+          feature: string
+          total_calls: number
+          total_cost_inr: number
+          total_cost_usd: number
+          total_tokens: number
+        }[]
+      }
       get_user_usage_stats: {
         Args: { p_days?: number; p_user_id: string }
         Returns: {
