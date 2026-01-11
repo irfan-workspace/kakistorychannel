@@ -1,5 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
+import { SEOHead } from '@/components/SEOHead';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -49,7 +50,9 @@ export default function Index() {
   ];
 
   return (
-    <div className="min-h-screen bg-background">
+    <>
+      <SEOHead />
+      <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur">
         <div className="container flex h-16 items-center justify-between">
@@ -249,5 +252,6 @@ export default function Index() {
         </div>
       </footer>
     </div>
+    </>
   );
 }
