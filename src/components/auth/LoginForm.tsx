@@ -160,6 +160,14 @@ export function LoginForm() {
               'Sign In'
             )}
           </Button>
+          <div className="text-center">
+            <Link 
+              to="/forgot-password" 
+              className="text-sm text-muted-foreground hover:text-primary transition-colors"
+            >
+              Forgot your password?
+            </Link>
+          </div>
         </form>
       </CardContent>
       <CardFooter className="flex justify-center">
