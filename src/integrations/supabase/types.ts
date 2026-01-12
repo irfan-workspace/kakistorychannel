@@ -162,6 +162,7 @@ export type Database = {
           full_name: string | null
           id: string
           monthly_exports_used: number
+          notification_preferences: Json | null
           subscription_tier: Database["public"]["Enums"]["subscription_tier"]
           updated_at: string
           user_id: string
@@ -173,6 +174,7 @@ export type Database = {
           full_name?: string | null
           id?: string
           monthly_exports_used?: number
+          notification_preferences?: Json | null
           subscription_tier?: Database["public"]["Enums"]["subscription_tier"]
           updated_at?: string
           user_id: string
@@ -184,6 +186,7 @@ export type Database = {
           full_name?: string | null
           id?: string
           monthly_exports_used?: number
+          notification_preferences?: Json | null
           subscription_tier?: Database["public"]["Enums"]["subscription_tier"]
           updated_at?: string
           user_id?: string
