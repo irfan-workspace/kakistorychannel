@@ -154,6 +154,154 @@ export type Database = {
           },
         ]
       }
+      payment_audit_logs: {
+        Row: {
+          action: string
+          actor_id: string | null
+          actor_role: string | null
+          created_at: string
+          id: string
+          ip_address: string | null
+          metadata: Json | null
+          new_values: Json | null
+          old_values: Json | null
+          payment_request_id: string | null
+          user_agent: string | null
+        }
+        Insert: {
+          action: string
+          actor_id?: string | null
+          actor_role?: string | null
+          created_at?: string
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+          new_values?: Json | null
+          old_values?: Json | null
+          payment_request_id?: string | null
+          user_agent?: string | null
+        }
+        Update: {
+          action?: string
+          actor_id?: string | null
+          actor_role?: string | null
+          created_at?: string
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+          new_values?: Json | null
+          old_values?: Json | null
+          payment_request_id?: string | null
+          user_agent?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payment_audit_logs_payment_request_id_fkey"
+            columns: ["payment_request_id"]
+            isOneToOne: false
+            referencedRelation: "payment_requests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      payment_requests: {
+        Row: {
+          amount: number
+          created_at: string
+          credits: number
+          expires_at: string
+          id: string
+          payer_vpa: string | null
+          payment_method: string | null
+          qr_code_data: string
+          status: string
+          updated_at: string
+          upi_transaction_id: string | null
+          user_id: string
+          verified_at: string | null
+          verified_by: string | null
+        }
+        Insert: {
+          amount: number
+          created_at?: string
+          credits: number
+          expires_at?: string
+          id?: string
+          payer_vpa?: string | null
+          payment_method?: string | null
+          qr_code_data: string
+          status?: string
+          updated_at?: string
+          upi_transaction_id?: string | null
+          user_id: string
+          verified_at?: string | null
+          verified_by?: string | null
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          credits?: number
+          expires_at?: string
+          id?: string
+          payer_vpa?: string | null
+          payment_method?: string | null
+          qr_code_data?: string
+          status?: string
+          updated_at?: string
+          upi_transaction_id?: string | null
+          user_id?: string
+          verified_at?: string | null
+          verified_by?: string | null
+        }
+        Relationships: []
+      }
+      payment_transactions: {
+        Row: {
+          amount: number
+          created_at: string
+          credits_added: number
+          id: string
+          payer_vpa: string | null
+          payment_method: string | null
+          payment_request_id: string
+          transaction_hash: string
+          upi_transaction_id: string
+          user_id: string
+        }
+        Insert: {
+          amount: number
+          created_at?: string
+          credits_added: number
+          id?: string
+          payer_vpa?: string | null
+          payment_method?: string | null
+          payment_request_id: string
+          transaction_hash: string
+          upi_transaction_id: string
+          user_id: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          credits_added?: number
+          id?: string
+          payer_vpa?: string | null
+          payment_method?: string | null
+          payment_request_id?: string
+          transaction_hash?: string
+          upi_transaction_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payment_transactions_payment_request_id_fkey"
+            columns: ["payment_request_id"]
+            isOneToOne: false
+            referencedRelation: "payment_requests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -163,6 +311,7 @@ export type Database = {
           id: string
           monthly_exports_used: number
           notification_preferences: Json | null
+          role: string
           subscription_tier: Database["public"]["Enums"]["subscription_tier"]
           updated_at: string
           user_id: string
@@ -175,6 +324,7 @@ export type Database = {
           id?: string
           monthly_exports_used?: number
           notification_preferences?: Json | null
+          role?: string
           subscription_tier?: Database["public"]["Enums"]["subscription_tier"]
           updated_at?: string
           user_id: string
@@ -187,6 +337,7 @@ export type Database = {
           id?: string
           monthly_exports_used?: number
           notification_preferences?: Json | null
+          role?: string
           subscription_tier?: Database["public"]["Enums"]["subscription_tier"]
           updated_at?: string
           user_id?: string
@@ -538,6 +689,16 @@ export type Database = {
           p_window_minutes?: number
         }
         Returns: boolean
+      }
+      generate_transaction_hash: {
+        Args: {
+          p_amount: number
+          p_request_id: string
+          p_timestamp: string
+          p_upi_id: string
+          p_user_id: string
+        }
+        Returns: string
       }
       get_active_job: {
         Args: { p_user_id: string }
