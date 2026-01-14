@@ -11,11 +11,10 @@ const ALERT_THRESHOLDS = [
   { percentage: 100, message: 'All credits exhausted!', variant: 'destructive' as const },
 ];
 
-// Default credit limits per tier
+// Default credit limits per tier (credits-based system)
 const CREDIT_LIMITS: Record<string, number> = {
-  free: 100,
-  monthly: 1000,
-  credits: 500, // Base for credits tier
+  free: 5,
+  credits: 1000, // Base limit for credits tier
 };
 
 interface UsageStats {

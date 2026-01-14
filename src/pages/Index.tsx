@@ -183,18 +183,44 @@ export default function Index() {
         <div className="container">
           <div className="text-center mb-12">
             <h2 className="text-3xl font-display font-bold mb-3">
-              Simple, Transparent Pricing
+              Pay-Per-Credit Pricing
             </h2>
-            <p className="text-muted-foreground">Start free, upgrade when you need more</p>
+            <p className="text-muted-foreground">Start free, buy credits when you need more</p>
           </div>
-          <div className="max-w-sm mx-auto">
+          <div className="grid gap-6 max-w-3xl mx-auto md:grid-cols-2">
             <div className="p-8 rounded-2xl bg-card border shadow-medium text-center">
-              <h3 className="text-xl font-bold mb-2">Free to Start</h3>
+              <h3 className="text-xl font-bold mb-2">Free Tier</h3>
               <p className="text-4xl font-bold mb-4">
-                ₹0<span className="text-lg text-muted-foreground">/month</span>
+                5<span className="text-lg text-muted-foreground"> credits</span>
               </p>
               <ul className="space-y-3 mb-6 text-left">
-                {['5 free credits', '3 projects', 'All AI features', 'Basic support'].map(
+                {['5 free credits to start', '3 projects', 'All AI features', 'Watermark on exports'].map(
+                  (item) => (
+                    <li key={item} className="flex items-center gap-2 text-sm">
+                      <Check className="h-4 w-4 text-success" />
+                      {item}
+                    </li>
+                  )
+                )}
+              </ul>
+              <Button
+                className="w-full"
+                variant="outline"
+                onClick={() => navigate(user ? '/dashboard' : '/signup')}
+              >
+                Start Free
+              </Button>
+            </div>
+            <div className="p-8 rounded-2xl bg-card border-primary border-2 shadow-glow text-center relative">
+              <Badge className="absolute -top-3 left-1/2 -translate-x-1/2 gradient-primary">
+                Best Value
+              </Badge>
+              <h3 className="text-xl font-bold mb-2">Credit Packs</h3>
+              <p className="text-4xl font-bold mb-4">
+                ₹7<span className="text-lg text-muted-foreground">/credit</span>
+              </p>
+              <ul className="space-y-3 mb-6 text-left">
+                {['Buy credits as needed', 'Credits never expire', 'No watermark', 'HD exports & all features'].map(
                   (item) => (
                     <li key={item} className="flex items-center gap-2 text-sm">
                       <Check className="h-4 w-4 text-success" />
@@ -205,9 +231,9 @@ export default function Index() {
               </ul>
               <Button
                 className="w-full gradient-primary"
-                onClick={() => navigate(user ? '/dashboard' : '/signup')}
+                onClick={() => navigate(user ? '/dashboard/subscription' : '/signup')}
               >
-                Get Started Free
+                Buy Credits
               </Button>
             </div>
           </div>
