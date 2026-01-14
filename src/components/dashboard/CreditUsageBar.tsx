@@ -9,9 +9,8 @@ import { Coins, TrendingUp, AlertTriangle, CreditCard } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const CREDIT_LIMITS: Record<string, number> = {
-  free: 100,
-  monthly: 1000,
-  credits: 500,
+  free: 5,
+  credits: 1000, // Base limit for display purposes
 };
 
 const TIER_LABELS: Record<string, string> = {

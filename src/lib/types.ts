@@ -6,7 +6,7 @@ export type VisualStyle = 'cartoon' | 'storybook' | 'kids_illustration';
 export type VoiceType = 'male' | 'female' | 'child';
 export type ProjectStatus = 'draft' | 'processing' | 'ready' | 'exported';
 export type SceneStatus = 'pending' | 'generating' | 'completed' | 'failed';
-export type SubscriptionTier = 'free' | 'monthly' | 'credits';
+export type SubscriptionTier = 'free' | 'credits';
 export type AppRole = 'admin' | 'user';
 
 // Profile type
